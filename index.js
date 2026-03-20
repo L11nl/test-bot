@@ -3,13 +3,16 @@ const axios = require('axios');
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-const ADMIN_ID = 643309456;
+const MAIN_ADMIN = 643309456;
+let admins = [MAIN_ADMIN];
 
 let users = {};
+let waitingCustomEmail = {};
 let waitingTransfer = {};
 let waitingBroadcast = false;
-let waitingCustomEmail = {};
-let channel = null; // القناة تتحدد من البوت
+let waitingAdminAdd = {};
+let waitingChannel = {};
+let channel = null;
 
 // باسورد
 function generatePassword() {
@@ -19,7 +22,6 @@ function generatePassword() {
 // تحقق اشتراك
 async function checkJoin(userId) {
   if (!channel) return true;
-
   try {
     const res = await bot.getChatMember(channel, userId);
     return ["member","administrator","creator"].includes(res.status);
@@ -48,20 +50,20 @@ async function forceJoin(msg) {
     );
     return false;
   }
-
   return true;
 }
 
-// قائمة
+// القائمة
 function menu(chatId) {
   bot.sendMessage(chatId, "اختر:", {
     reply_markup: {
-      keyboard: [
-        ["📧 إنشاء إيميل", "🗑️ حذف"],
-        ["📤 نقل", "🔕 كتم"],
-        ["📥 عرض"]
-      ],
-      resize_keyboard: true
+      inline_keyboard: [
+        [{ text: "📧 إنشاء إيميل", callback_data: "create" }],
+        [{ text: "📥 عرض", callback_data: "show" }],
+        [{ text: "🗑️ حذف", callback_data: "delete" }],
+        [{ text: "📤 نقل", callback_data: "transfer" }],
+        [{ text: "🔕 كتم", callback_data: "mute" }]
+      ]
     }
   });
 }
@@ -72,21 +74,125 @@ bot.onText(/\/start/, async (msg) => {
   menu(msg.chat.id);
 });
 
-// تعيين قناة (ادمن)
-bot.onText(/\/setchannel/, (msg) => {
-  if (msg.chat.id != ADMIN_ID) return;
-  bot.sendMessage(msg.chat.id, "📌 ارسل يوزر القناة مثل:\n@channel");
+// 👑 لوحة الأدمن
+bot.onText(/\/admin/, (msg) => {
+  if (msg.chat.id != MAIN_ADMIN) return;
+
+  bot.sendMessage(msg.chat.id, "👑 لوحة الأدمن", {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "📢 إرسال إعلان", callback_data: "admin_broadcast" }],
+        [{ text: "➕ إضافة أدمن", callback_data: "admin_add" }],
+        [{ text: "📌 تعيين قناة", callback_data: "admin_channel" }]
+      ]
+    }
+  });
+});
+
+// الأزرار
+bot.on("callback_query", async (q) => {
+  const chatId = q.message.chat.id;
+
+  if (!(await forceJoin(q.message))) return;
+
+  // تحقق
+  if (q.data === "check_join") {
+    if (await checkJoin(q.from.id)) {
+      bot.sendMessage(chatId, "✅ تم التحقق");
+      menu(chatId);
+    } else {
+      bot.sendMessage(chatId, "❌ لم تشترك");
+    }
+  }
+
+  // إنشاء
+  if (q.data === "create") {
+    waitingCustomEmail[chatId] = true;
+    bot.sendMessage(chatId, "✍️ اكتب اسم الإيميل");
+  }
+
+  // عرض
+  if (q.data === "show") {
+    const user = users[chatId];
+    if (!user) return bot.sendMessage(chatId, "❗ لا يوجد");
+
+    bot.sendMessage(chatId,
+      `📧 ${user.email}\n🔐 ${user.password}`
+    );
+  }
+
+  // حذف
+  if (q.data === "delete") {
+    delete users[chatId];
+    bot.sendMessage(chatId, "🗑️ تم الحذف");
+  }
+
+  // نقل
+  if (q.data === "transfer") {
+    waitingTransfer[chatId] = true;
+    bot.sendMessage(chatId, "📨 ارسل ID");
+  }
+
+  // كتم
+  if (q.data === "mute") {
+    const user = users[chatId];
+    if (!user) return;
+
+    user.muted = !user.muted;
+
+    bot.sendMessage(chatId,
+      user.muted ? "🔕 تم الكتم" : "🔔 تم التفعيل"
+    );
+  }
+
+  // 👑 إعلان
+  if (q.data === "admin_broadcast" && chatId == MAIN_ADMIN) {
+    waitingBroadcast = true;
+    bot.sendMessage(chatId, "📢 ارسل الإعلان");
+  }
+
+  // 👑 إضافة أدمن
+  if (q.data === "admin_add" && chatId == MAIN_ADMIN) {
+    waitingAdminAdd[chatId] = true;
+    bot.sendMessage(chatId, "➕ ارسل ID");
+  }
+
+  // 👑 قناة
+  if (q.data === "admin_channel" && chatId == MAIN_ADMIN) {
+    waitingChannel[chatId] = true;
+    bot.sendMessage(chatId, "📌 ارسل @channel");
+  }
 });
 
 // استقبال
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
 
-  // تعيين القناة
-  if (msg.chat.id == ADMIN_ID && msg.text.startsWith("@")) {
+  // إعلان
+  if (waitingBroadcast && chatId == MAIN_ADMIN) {
+    waitingBroadcast = false;
+
+    for (let id in users) {
+      bot.sendMessage(id, `📢 ${msg.text}`);
+    }
+
+    bot.sendMessage(chatId, "✅ تم الإرسال");
+  }
+
+  // إضافة أدمن
+  if (waitingAdminAdd[chatId]) {
+    admins.push(parseInt(msg.text));
+    delete waitingAdminAdd[chatId];
+
+    bot.sendMessage(chatId, "✅ تم إضافة أدمن");
+  }
+
+  // قناة
+  if (waitingChannel[chatId]) {
     channel = msg.text;
+    delete waitingChannel[chatId];
+
     bot.sendMessage(chatId, "✅ تم تعيين القناة");
-    return;
   }
 
   // نقل
@@ -103,18 +209,7 @@ bot.on("message", async (msg) => {
     bot.sendMessage(target, "📥 تم استلام الإيميل");
   }
 
-  // إعلان
-  if (waitingBroadcast && chatId == ADMIN_ID) {
-    waitingBroadcast = false;
-
-    for (let id in users) {
-      bot.sendMessage(id, `📢 إعلان:\n\n${msg.text}`);
-    }
-
-    bot.sendMessage(chatId, "✅ تم الإرسال");
-  }
-
-  // إنشاء مخصص
+  // إنشاء
   if (waitingCustomEmail[chatId]) {
     delete waitingCustomEmail[chatId];
 
@@ -145,14 +240,8 @@ bot.on("message", async (msg) => {
       };
 
       bot.sendMessage(chatId,
-        `📧 ${email}\n🔐 ${password}`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "📋 نسخ الإيميل", callback_data: "copy" }]
-            ]
-          }
-        }
+        `📧 الإيميل:\n\`${email}\`\n\n🔐 الباسورد:\n\`${password}\``,
+        { parse_mode: "Markdown" }
       );
 
     } catch {
@@ -161,88 +250,7 @@ bot.on("message", async (msg) => {
   }
 });
 
-// تحقق زر
-bot.on("callback_query", async (q) => {
-
-  if (q.data === "check_join") {
-    if (await checkJoin(q.from.id)) {
-      bot.sendMessage(q.message.chat.id, "✅ تم التحقق");
-      menu(q.message.chat.id);
-    } else {
-      bot.sendMessage(q.message.chat.id, "❌ لم تشترك");
-    }
-  }
-
-  if (q.data === "copy") {
-    const user = users[q.from.id];
-    if (!user) return;
-
-    bot.sendMessage(q.message.chat.id, `📋 ${user.email}`);
-  }
-});
-
-// إنشاء
-bot.onText(/📧 إنشاء إيميل/, async (msg) => {
-  if (!(await forceJoin(msg))) return;
-
-  waitingCustomEmail[msg.chat.id] = true;
-
-  bot.sendMessage(msg.chat.id,
-    "✍️ اكتب اسم الإيميل\nمثال:\nAli"
-  );
-});
-
-// حذف
-bot.onText(/🗑️ حذف/, async (msg) => {
-  if (!(await forceJoin(msg))) return;
-
-  delete users[msg.chat.id];
-  bot.sendMessage(msg.chat.id, "🗑️ تم الحذف");
-});
-
-// عرض
-bot.onText(/📥 عرض/, async (msg) => {
-  if (!(await forceJoin(msg))) return;
-
-  const user = users[msg.chat.id];
-  if (!user) return bot.sendMessage(msg.chat.id, "❗ لا يوجد");
-
-  bot.sendMessage(msg.chat.id,
-    `📧 ${user.email}\n🔐 ${user.password}`
-  );
-});
-
-// نقل
-bot.onText(/📤 نقل/, async (msg) => {
-  if (!(await forceJoin(msg))) return;
-
-  waitingTransfer[msg.chat.id] = true;
-  bot.sendMessage(msg.chat.id, "📨 ارسل ID");
-});
-
-// كتم
-bot.onText(/🔕 كتم/, async (msg) => {
-  if (!(await forceJoin(msg))) return;
-
-  const user = users[msg.chat.id];
-  if (!user) return;
-
-  user.muted = !user.muted;
-
-  bot.sendMessage(msg.chat.id,
-    user.muted ? "🔕 تم الكتم" : "🔔 تم التفعيل"
-  );
-});
-
-// إعلان
-bot.onText(/\/broadcast/, (msg) => {
-  if (msg.chat.id != ADMIN_ID) return;
-
-  waitingBroadcast = true;
-  bot.sendMessage(msg.chat.id, "📢 ارسل الإعلان");
-});
-
-// رسائل
+// الرسائل
 setInterval(async () => {
   for (let chatId in users) {
     const user = users[chatId];
