@@ -5,9 +5,27 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 let users = {};
 
+// 🔤 كلمات عشوائية
+const words = ["red", "blue", "sky", "fox", "wolf", "star", "moon", "sun", "fire", "ice"];
+
+// توليد إيميل عشوائي (كلمات)
+function generateEmail(domain) {
+  const name =
+    words[Math.floor(Math.random() * words.length)] +
+    words[Math.floor(Math.random() * words.length)] +
+    Math.floor(Math.random() * 100);
+
+  return `${name}@${domain}`;
+}
+
+// توليد باسورد عشوائي
+function generatePassword() {
+  return Math.random().toString(36).slice(-10);
+}
+
 // رسالة البداية
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, "👋 أهلاً!\n\n/send لإنشاء إيميل مؤقت\n/inbox لعرض الرسائل");
+  bot.sendMessage(msg.chat.id, "👋 أهلاً!\n\n/send لإنشاء إيميل مؤقت");
 });
 
 // إنشاء إيميل
@@ -18,8 +36,8 @@ bot.onText(/\/send/, async (msg) => {
     const domainRes = await axios.get("https://api.mail.tm/domains");
     const domain = domainRes.data["hydra:member"][0].domain;
 
-    const email = `user${Date.now()}@${domain}`;
-    const password = "123456";
+    const email = generateEmail(domain);
+    const password = generatePassword();
 
     await axios.post("https://api.mail.tm/accounts", {
       address: email,
@@ -33,9 +51,16 @@ bot.onText(/\/send/, async (msg) => {
 
     const apiToken = tokenRes.data.token;
 
-    users[chatId] = { email, apiToken };
+    users[chatId] = {
+      email,
+      password,
+      apiToken,
+      lastMessages: []
+    };
 
-    bot.sendMessage(chatId, `✅ تم إنشاء الإيميل:\n${email}\n\nاستخدم /inbox`);
+    bot.sendMessage(chatId,
+      `✅ تم إنشاء الإيميل:\n${email}\n\n🔐 الباسورد:\n${password}\n\n📥 سيتم إرسال الرسائل تلقائيًا هنا`
+    );
 
   } catch (e) {
     bot.sendMessage(chatId, "❌ خطأ");
@@ -43,37 +68,45 @@ bot.onText(/\/send/, async (msg) => {
   }
 });
 
-// عرض الرسائل
-bot.onText(/\/inbox/, async (msg) => {
-  const chatId = msg.chat.id;
 
-  if (!users[chatId]) {
-    return bot.sendMessage(chatId, "❗ استخدم /send أولاً");
-  }
+// 🔔 فحص الرسائل تلقائي
+setInterval(async () => {
+  for (let chatId in users) {
+    try {
+      const user = users[chatId];
 
-  try {
-    const res = await axios.get("https://api.mail.tm/messages", {
-      headers: {
-        Authorization: `Bearer ${users[chatId].apiToken}`
+      const res = await axios.get("https://api.mail.tm/messages", {
+        headers: {
+          Authorization: `Bearer ${user.apiToken}`
+        }
+      });
+
+      const messages = res.data["hydra:member"];
+
+      for (let m of messages) {
+        // إذا الرسالة جديدة
+        if (!user.lastMessages.includes(m.id)) {
+
+          const detail = await axios.get(`https://api.mail.tm/messages/${m.id}`, {
+            headers: {
+              Authorization: `Bearer ${user.apiToken}`
+            }
+          });
+
+          const content = detail.data.text || "لا يوجد محتوى";
+
+          bot.sendMessage(chatId,
+            `📨 رسالة جديدة!\n\n📧 من: ${m.from.address}\n📌 العنوان: ${m.subject}\n\n📝 ${content}`
+          );
+
+          user.lastMessages.push(m.id);
+        }
       }
-    });
 
-    const messages = res.data["hydra:member"];
-
-    if (messages.length === 0) {
-      return bot.sendMessage(chatId, "📭 لا توجد رسائل");
+    } catch (e) {
+      console.log("Error checking messages:", e.message);
     }
-
-    let text = "📨 الرسائل:\n\n";
-
-    messages.forEach(m => {
-      text += `📧 من: ${m.from.address}\n`;
-      text += `📌 العنوان: ${m.subject}\n\n`;
-    });
-
-    bot.sendMessage(chatId, text);
-
-  } catch (e) {
-    bot.sendMessage(chatId, "❌ خطأ في جلب الرسائل");
   }
-});
+}, 10000); // كل 10 ثواني
+
+console.log("Bot is running...");
