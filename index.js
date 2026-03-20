@@ -10,7 +10,7 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 app.get('/', (req, res) => res.send("Bot alive"));
 app.listen(process.env.PORT || 3000);
 
-// ================== حفظ البيانات ==================
+// ================== قاعدة البيانات ==================
 const DB_FILE = "data.json";
 
 function loadDB() {
@@ -55,6 +55,10 @@ function isAdmin(id) {
   return admins.includes(id);
 }
 
+function validName(name){
+  return /^[a-z0-9]+$/.test(name);
+}
+
 // ================== الاشتراك ==================
 async function checkJoin(id) {
   if (!settings.forceSub || !settings.channel) return true;
@@ -62,7 +66,7 @@ async function checkJoin(id) {
     const res = await bot.getChatMember(settings.channel, id);
     return ["member","administrator","creator"].includes(res.status);
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -89,7 +93,8 @@ function menu(id) {
     reply_markup: {
       inline_keyboard: [
         [{ text: "📧 إنشاء", callback_data: "create" }],
-        [{ text: "📂 إيميلاتي", callback_data: "my" }]
+        [{ text: "📂 إيميلاتي", callback_data: "my" }],
+        [{ text: "🆘 مراسلة الدعم", callback_data: "support" }]
       ]
     }
   });
@@ -116,12 +121,14 @@ bot.onText(/\/admin/, (msg) => {
     reply_markup: {
       inline_keyboard: [
         [{ text: "📌 تعيين قناة", callback_data: "set_channel" }],
-        [{ text: "🔁 تشغيل/إيقاف الاشتراك", callback_data: "toggle_sub" }],
+        [
+          { text: "✅ تفعيل الاشتراك", callback_data: "enable_sub" },
+          { text: "❌ تعطيل الاشتراك", callback_data: "disable_sub" }
+        ],
+        [{ text: "👥 قائمة الأدمن", callback_data: "admins" }],
         [{ text: "📝 رسالة البداية", callback_data: "set_welcome" }],
         [{ text: "📎 نص الإيميل", callback_data: "set_footer" }],
-        [{ text: "📢 إذاعة", callback_data: "broadcast" }],
-        [{ text: "➕ أدمن", callback_data: "add_admin" }],
-        [{ text: "➖ حذف أدمن", callback_data: "del_admin" }]
+        [{ text: "📢 إذاعة", callback_data: "broadcast" }]
       ]
     }
   });
@@ -143,6 +150,11 @@ bot.on("callback_query", async (q) => {
     createEmail(id);
   }
 
+  if (data === "support") {
+    waiting[id] = "support";
+    bot.sendMessage(id,"✍️ اكتب رسالتك:");
+  }
+
   if (data === "my") {
     const u = users[id];
     if (!u || u.emails.length === 0)
@@ -158,7 +170,8 @@ bot.on("callback_query", async (q) => {
     inline_keyboard:[
       [
         { text:"🗑️ حذف", callback_data:`del_${i}` },
-        { text:"📤 نقل", callback_data:`tran_${i}` }
+        { text:"📤 نقل", callback_data:`tran_${i}` },
+        { text:"🔇 كتم", callback_data:`mute_${i}` }
       ]
     ]
   }
@@ -166,11 +179,18 @@ bot.on("callback_query", async (q) => {
     });
   }
 
+  if (data.startsWith("mute_")) {
+    const i = data.split("_")[1];
+    users[id].emails[i].mute = !users[id].emails[i].mute;
+    saveDB();
+    bot.sendMessage(id,"🔇 تم التغيير");
+  }
+
   if (data.startsWith("del_")) {
     const i = data.split("_")[1];
     users[id].emails.splice(i,1);
     saveDB();
-    bot.sendMessage(id,"🗑️ تم الحذف");
+    bot.sendMessage(id,"🗑️ تم");
   }
 
   if (data.startsWith("tran_")) {
@@ -179,40 +199,47 @@ bot.on("callback_query", async (q) => {
   }
 
   // ADMIN
-  if (data === "set_channel") {
-    waiting[id] = "channel";
-    bot.sendMessage(id,"📌 ارسل @channel");
+  if (data === "enable_sub") {
+    waiting[id] = "set_channel_force";
+    bot.sendMessage(id,"📌 ارسل رابط القناة");
   }
 
-  if (data === "toggle_sub") {
-    settings.forceSub = !settings.forceSub;
+  if (data === "disable_sub") {
+    settings.forceSub = false;
     saveDB();
-    bot.sendMessage(id,"✅ تم التغيير");
+    bot.sendMessage(id,"✅ تم تعطيل الاشتراك");
   }
 
-  if (data === "set_welcome") {
-    waiting[id] = "welcome";
-    bot.sendMessage(id,"✍️ ارسل النص");
+  if (data === "admins") {
+    if (id !== MAIN_ADMIN) return;
+
+    admins.forEach(a=>{
+      bot.sendMessage(id,`👤 ${a}`,{
+        reply_markup:{
+          inline_keyboard:[
+            [
+              { text:"✉️ مراسلة", callback_data:`msg_${a}` },
+              { text:"❌ حذف", callback_data:`rem_${a}` }
+            ]
+          ]
+        }
+      });
+    });
   }
 
-  if (data === "set_footer") {
-    waiting[id] = "footer";
-    bot.sendMessage(id,"✍️ ارسل النص");
+  if (data.startsWith("msg_")) {
+    const target = data.split("_")[1];
+    waiting[id] = { type:"admin_msg", to:target };
+    bot.sendMessage(id,"✍️ اكتب الرسالة");
   }
 
-  if (data === "broadcast") {
-    waiting[id] = "broadcast";
-    bot.sendMessage(id,"📢 ارسل الرسالة");
-  }
-
-  if (data === "add_admin") {
-    waiting[id] = "add_admin";
-    bot.sendMessage(id,"➕ ارسل ID");
-  }
-
-  if (data === "del_admin") {
-    waiting[id] = "del_admin";
-    bot.sendMessage(id,"➖ ارسل ID");
+  if (data.startsWith("rem_")) {
+    const target = Number(data.split("_")[1]);
+    if (target === MAIN_ADMIN) return bot.sendMessage(id,"❌ ممنوع");
+    admins = admins.filter(a=>a!==target);
+    db.admins = admins;
+    saveDB();
+    bot.sendMessage(id,"✅ تم");
   }
 });
 
@@ -223,6 +250,8 @@ async function createEmail(id, custom=null){
     const domain = domainRes.data["hydra:member"][0].domain;
 
     let name = custom || randName();
+
+    if (!validName(name)) return;
 
     const email = `${name}@${domain}`;
     const password = pass();
@@ -235,7 +264,8 @@ async function createEmail(id, custom=null){
     users[id].emails.push({
       email,password,
       apiToken:tokenRes.data.token,
-      last:[]
+      last:[],
+      mute:false
     });
 
     saveDB();
@@ -246,8 +276,11 @@ async function createEmail(id, custom=null){
 
 ${settings.footer || ""}`,{ parse_mode:"Markdown" });
 
-  } catch {
-    bot.sendMessage(id,"❌ فشل");
+  } catch (err){
+    if (err.response?.status === 422)
+      bot.sendMessage(id,"⚠️ هذا الاسم مستخدم جرب اسماً آخر");
+    else
+      bot.sendMessage(id,"❌ خطأ");
   }
 }
 
@@ -259,8 +292,24 @@ bot.on("message", async (msg)=>{
   if (!(await forceJoin(msg))) return;
   if (!text) return;
 
-  // CREATE مباشر
-  if (text === "/Create") return createEmail(id);
+  // منع أوامر
+  if (text.startsWith("/")) return;
+
+  // دعم
+  if (waiting[id]==="support"){
+    admins.forEach(a=>{
+      bot.sendMessage(a,`📩 دعم من ${id}\n${text}`);
+    });
+    waiting[id]=null;
+    return bot.sendMessage(id,"✅ تم الإرسال");
+  }
+
+  // مراسلة أدمن
+  if (waiting[id]?.type==="admin_msg"){
+    bot.sendMessage(waiting[id].to,`📩 رسالة من الأدمن:\n${text}`);
+    waiting[id]=null;
+    return;
+  }
 
   // تحويل
   if (waiting[id]?.type === "transfer") {
@@ -290,59 +339,16 @@ ID: ${u.id}`,{ parse_mode:"Markdown" });
     return;
   }
 
-  // إعدادات
-  if (waiting[id]==="channel"){
-    settings.channel=text;
-    settings.channelLink=`https://t.me/${text.replace("@","")}`;
-    waiting[id]=null;
-    saveDB();
-    return bot.sendMessage(id,"✅ تم");
-  }
-
-  if (waiting[id]==="welcome"){
-    settings.welcome=text;
-    waiting[id]=null;
-    saveDB();
-    return bot.sendMessage(id,"✅ تم");
-  }
-
-  if (waiting[id]==="footer"){
-    settings.footer=text;
-    waiting[id]=null;
-    saveDB();
-    return bot.sendMessage(id,"✅ تم");
-  }
-
-  if (waiting[id]==="broadcast" && isAdmin(id)){
-    for (let u in users) bot.sendMessage(u,text);
-    waiting[id]=null;
-    return;
-  }
-
-  if (waiting[id]==="add_admin"){
-    admins.push(Number(text));
-    saveDB();
-    waiting[id]=null;
-    return;
-  }
-
-  if (waiting[id]==="del_admin"){
-    if (Number(text)===MAIN_ADMIN) return bot.sendMessage(id,"❌ لا يمكن");
-    admins=admins.filter(a=>a!=text);
-    db.admins=admins;
-    saveDB();
-    waiting[id]=null;
-    return;
-  }
-
-  // أي نص = إنشاء إيميل
-  createEmail(id, text);
+  // إنشاء تلقائي
+  createEmail(id, text.toLowerCase());
 });
 
 // ================== جلب الرسائل ==================
 setInterval(async ()=>{
   for (let id in users){
     for (let e of users[id].emails){
+      if (e.mute) continue;
+
       try{
         const res = await axios.get("https://api.mail.tm/messages",{
           headers:{ Authorization:`Bearer ${e.apiToken}` }
