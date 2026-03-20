@@ -1,80 +1,82 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
-const express = require('express'); // 🔥 مهم
+const express = require('express');
 
-const app = express(); // 🔥 مهم
-
+const app = express();
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 const MAIN_ADMIN = 643309456;
 let admins = [MAIN_ADMIN];
 
 let users = {};
-let waitingTransfer = {};
-let waitingBroadcast = false;
-let waitingAdminAdd = {};
 let waitingChannel = {};
-let channel = null;
+let channel = null; // لازم يكون @channelname مو رابط
 
-// 🟢 سيرفر يمنع النوم
-app.get('/', (req, res) => {
-  res.send('Bot is alive ✅');
-});
+// 🔥 سيرفر
+app.get('/', (req, res) => res.send('Bot is alive ✅'));
+app.listen(process.env.PORT || 3000);
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log('Web server running');
-});
-
-// باسورد
+// 🔐 باسورد
 function pass() {
   return Math.random().toString(36).slice(-10);
 }
 
-// تحقق اشتراك
-async function checkJoin(id) {
-  if (!channel) return true;
+// 🧠 تحويل الرابط إلى يوزر
+function extractChannel(link) {
   try {
-    const r = await bot.getChatMember(channel, id);
-    return ["member","administrator","creator"].includes(r.status);
-  } catch { return false; }
+    if (link.includes("t.me/")) {
+      let part = link.split("t.me/")[1];
+      if (part.startsWith("+")) return null; // رابط خاص → ما نقدر نتحقق
+      return "@" + part;
+    }
+    if (link.startsWith("@")) return link;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
-// منع
+// ✅ تحقق اشتراك
+async function checkJoin(userId) {
+  if (!channel) return true;
+
+  try {
+    const res = await bot.getChatMember(channel, userId);
+    return ["member", "administrator", "creator"].includes(res.status);
+  } catch {
+    return true; // إذا فشل (رابط خاص مثلاً) → لا نمنع المستخدم
+  }
+}
+
+// 🚫 فرض الاشتراك
 async function forceJoin(msg) {
   if (!channel) return true;
 
-  if (!(await checkJoin(msg.chat.id))) {
-    bot.sendMessage(msg.chat.id,
-      `🚫 اشترك أولاً\n${channel}`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "📢 اشترك", url: `https://t.me/${channel.replace("@","")}` }],
-            [{ text: "✅ تحقق", callback_data: "check" }]
-          ]
-        }
-      });
+  const ok = await checkJoin(msg.chat.id);
+
+  if (!ok) {
+    bot.sendMessage(msg.chat.id, "🚫 يجب الاشتراك أولاً", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📢 الاشتراك", url: channelLink }],
+          [{ text: "✅ تحقق", callback_data: "check" }]
+        ]
+      }
+    });
     return false;
   }
+
   return true;
 }
 
 // قائمة
 function menu(id) {
-  bot.sendMessage(id, "اختر:", {
+  bot.sendMessage(id, "✨ اختر:", {
     reply_markup: {
       inline_keyboard: [
         [
           { text: "📧 إنشاء", callback_data: "create" },
-          { text: "📥 عرض", callback_data: "show" }
-        ],
-        [
-          { text: "🗑️ حذف", callback_data: "delete" },
-          { text: "📤 نقل", callback_data: "transfer" }
-        ],
-        [
-          { text: "🔕 كتم", callback_data: "mute" },
-          { text: "📂 إيميلاتي", callback_data: "my" }
+          { text: "📂 إيميلي", callback_data: "show" }
         ]
       ]
     }
@@ -87,17 +89,15 @@ bot.onText(/\/start/, async (msg) => {
   menu(msg.chat.id);
 });
 
-// 👑 لوحة الأدمن
+// 👑 الأدمن
 bot.onText(/\/admin/, (msg) => {
   if (!admins.includes(msg.chat.id)) return;
 
-  bot.sendMessage(msg.chat.id, "👑 إدارة البوت", {
+  bot.sendMessage(msg.chat.id, "👑 الإدارة:", {
     reply_markup: {
       inline_keyboard: [
-        [{ text: "📢 إعلان", callback_data: "admin_bc" }],
-        [{ text: "➕ إضافة أدمن", callback_data: "admin_add" }],
-        [{ text: "📌 تعيين قناة", callback_data: "admin_setch" }],
-        [{ text: "❌ حذف القناة", callback_data: "admin_delch" }]
+        [{ text: "📌 تعيين قناة", callback_data: "set_channel" }],
+        [{ text: "❌ حذف القناة", callback_data: "del_channel" }]
       ]
     }
   });
@@ -107,13 +107,13 @@ bot.onText(/\/admin/, (msg) => {
 bot.on("callback_query", async (q) => {
   const id = q.message.chat.id;
 
-  if (!(await forceJoin(q.message))) return;
-
   if (q.data === "check") {
     if (await checkJoin(id)) {
-      bot.sendMessage(id, "✅ تم");
+      bot.sendMessage(id, "✅ تم التحقق");
       menu(id);
-    } else bot.sendMessage(id, "❌ لم تشترك");
+    } else {
+      bot.sendMessage(id, "❌ لم تشترك");
+    }
   }
 
   if (q.data === "create") {
@@ -121,61 +121,20 @@ bot.on("callback_query", async (q) => {
   }
 
   if (q.data === "show") {
-    const u = users[id];
-    if (!u) return bot.sendMessage(id, "❗ لا يوجد");
+    if (!users[id]) return bot.sendMessage(id, "❗ لا يوجد");
 
-    bot.sendMessage(id, `📧 ${u.email}\n🔐 ${u.password}`);
+    bot.sendMessage(id, `📧 ${users[id].email}\n🔐 ${users[id].password}`);
   }
 
-  if (q.data === "delete") {
-    delete users[id];
-    bot.sendMessage(id, "🗑️ تم الحذف");
-  }
-
-  if (q.data === "transfer") {
-    waitingTransfer[id] = true;
-    bot.sendMessage(id, "📨 ارسل ID");
-  }
-
-  if (q.data === "mute") {
-    const u = users[id];
-    if (!u) return;
-    u.muted = !u.muted;
-    bot.sendMessage(id, u.muted ? "🔕 تم الكتم" : "🔔 تم التفعيل");
-  }
-
-  if (q.data === "my") {
-    const u = users[id];
-    if (!u) return bot.sendMessage(id, "❗ لا يوجد");
-
-    bot.sendMessage(id, `📂 إيميلك:\n${u.email}`);
-  }
-
-  if (q.data === "mute_email") {
-    const u = users[id];
-    if (!u) return;
-    u.muted = true;
-    bot.sendMessage(id, "🔕 تم كتم هذا الإيميل");
-  }
-
-  if (q.data === "admin_bc" && admins.includes(id)) {
-    waitingBroadcast = true;
-    bot.sendMessage(id, "📢 اكتب الإعلان");
-  }
-
-  if (q.data === "admin_add" && id == MAIN_ADMIN) {
-    waitingAdminAdd[id] = true;
-    bot.sendMessage(id, "➕ ارسل ID");
-  }
-
-  if (q.data === "admin_setch" && admins.includes(id)) {
+  if (q.data === "set_channel" && admins.includes(id)) {
     waitingChannel[id] = true;
-    bot.sendMessage(id, "📌 ارسل @channel");
+    bot.sendMessage(id, "📌 أرسل رابط القناة أو @username");
   }
 
-  if (q.data === "admin_delch" && admins.includes(id)) {
+  if (q.data === "del_channel" && admins.includes(id)) {
     channel = null;
-    bot.sendMessage(id, "❌ تم حذف القناة");
+    channelLink = null;
+    bot.sendMessage(id, "✅ تم حذف الاشتراك الإجباري");
   }
 });
 
@@ -183,46 +142,25 @@ bot.on("callback_query", async (q) => {
 bot.on("message", async (msg) => {
   const id = msg.chat.id;
 
-  if (waitingBroadcast && admins.includes(id)) {
-    waitingBroadcast = false;
-    for (let u in users) {
-      bot.sendMessage(u, `📢 ${msg.text}`);
-    }
-    bot.sendMessage(id, "✅ تم");
-  }
-
-  if (waitingAdminAdd[id]) {
-    const newAdmin = parseInt(msg.text);
-    admins.push(newAdmin);
-    delete waitingAdminAdd[id];
-
-    bot.sendMessage(id, "✅ تم");
-    bot.sendMessage(newAdmin, "👑 تم ترقيتك إلى أدمن\nاكتب /admin");
-  }
-
+  // تعيين قناة
   if (waitingChannel[id]) {
-    channel = msg.text;
+    const link = msg.text;
+    const extracted = extractChannel(link);
+
+    channelLink = link;
+    channel = extracted;
+
     delete waitingChannel[id];
-    bot.sendMessage(id, "✅ تم");
+
+    bot.sendMessage(id, extracted
+      ? "✅ تم تفعيل الاشتراك الإجباري"
+      : "⚠️ رابط خاص → لن يتم التحقق ولكن سيتم عرضه فقط");
   }
 
-  if (waitingTransfer[id]) {
-    const target = msg.text;
+  if (!(await forceJoin(msg))) return;
 
-    if (!users[id]) return;
-
-    users[target] = users[id];
-    delete users[id];
-    delete waitingTransfer[id];
-
-    bot.sendMessage(id, "✅ تم النقل");
-
-    bot.sendMessage(target,
-      `📥 تم نقل إيميل لك\n\n👤 من: ${msg.from.first_name}\n🔗 @${msg.from.username || "لا يوجد"}\n🆔 ${msg.from.id}`
-    );
-  }
-
-  if (!msg.text.startsWith("/") && !users[id]) {
+  // إنشاء إيميل
+  if (!msg.text.startsWith("/")) {
     try {
       const domainRes = await axios.get("https://api.mail.tm/domains");
       const domain = domainRes.data["hydra:member"][0].domain;
@@ -233,20 +171,19 @@ bot.on("message", async (msg) => {
 
       await axios.post("https://api.mail.tm/accounts", {
         address: email,
-        password: password
+        password
       });
 
       const tokenRes = await axios.post("https://api.mail.tm/token", {
         address: email,
-        password: password
+        password
       });
 
       users[id] = {
         email,
         password,
         apiToken: tokenRes.data.token,
-        lastMessages: [],
-        muted: false
+        lastMessages: []
       };
 
       bot.sendMessage(id,
@@ -260,11 +197,10 @@ bot.on("message", async (msg) => {
   }
 });
 
-// الرسائل
+// استقبال الرسائل
 setInterval(async () => {
   for (let id in users) {
     const u = users[id];
-    if (u.muted) continue;
 
     try {
       const res = await axios.get("https://api.mail.tm/messages", {
@@ -279,14 +215,7 @@ setInterval(async () => {
           });
 
           bot.sendMessage(id,
-            `📨 رسالة\n\n📧 من: ${m.from.address}\n📩 إلى: ${u.email}\n\n${d.data.text || ""}`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [{ text: "🔕 كتم رسائل هذا الإيميل", callback_data: "mute_email" }]
-                ]
-              }
-            }
+            `📨 رسالة\n📧 من: ${m.from.address}\n📩 إلى: ${u.email}\n\n${d.data.text || ""}`
           );
 
           u.lastMessages.push(m.id);
@@ -297,4 +226,4 @@ setInterval(async () => {
   }
 }, 10000);
 
-console.log("Bot is running...");
+console.log("🔥 Bot running...");
