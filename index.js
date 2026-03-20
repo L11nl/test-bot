@@ -1,5 +1,8 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const express = require('express'); // 🔥 مهم
+
+const app = express(); // 🔥 مهم
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
@@ -12,6 +15,15 @@ let waitingBroadcast = false;
 let waitingAdminAdd = {};
 let waitingChannel = {};
 let channel = null;
+
+// 🟢 سيرفر يمنع النوم
+app.get('/', (req, res) => {
+  res.send('Bot is alive ✅');
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log('Web server running');
+});
 
 // باسورد
 function pass() {
@@ -97,7 +109,6 @@ bot.on("callback_query", async (q) => {
 
   if (!(await forceJoin(q.message))) return;
 
-  // تحقق
   if (q.data === "check") {
     if (await checkJoin(id)) {
       bot.sendMessage(id, "✅ تم");
@@ -105,12 +116,10 @@ bot.on("callback_query", async (q) => {
     } else bot.sendMessage(id, "❌ لم تشترك");
   }
 
-  // إنشاء
   if (q.data === "create") {
     bot.sendMessage(id, "✍️ اكتب اسم الإيميل");
   }
 
-  // عرض
   if (q.data === "show") {
     const u = users[id];
     if (!u) return bot.sendMessage(id, "❗ لا يوجد");
@@ -118,19 +127,16 @@ bot.on("callback_query", async (q) => {
     bot.sendMessage(id, `📧 ${u.email}\n🔐 ${u.password}`);
   }
 
-  // حذف
   if (q.data === "delete") {
     delete users[id];
     bot.sendMessage(id, "🗑️ تم الحذف");
   }
 
-  // نقل
   if (q.data === "transfer") {
     waitingTransfer[id] = true;
     bot.sendMessage(id, "📨 ارسل ID");
   }
 
-  // كتم عام
   if (q.data === "mute") {
     const u = users[id];
     if (!u) return;
@@ -138,7 +144,6 @@ bot.on("callback_query", async (q) => {
     bot.sendMessage(id, u.muted ? "🔕 تم الكتم" : "🔔 تم التفعيل");
   }
 
-  // إيميلاتي
   if (q.data === "my") {
     const u = users[id];
     if (!u) return bot.sendMessage(id, "❗ لا يوجد");
@@ -146,7 +151,6 @@ bot.on("callback_query", async (q) => {
     bot.sendMessage(id, `📂 إيميلك:\n${u.email}`);
   }
 
-  // كتم ايميل من الرسالة
   if (q.data === "mute_email") {
     const u = users[id];
     if (!u) return;
@@ -154,19 +158,16 @@ bot.on("callback_query", async (q) => {
     bot.sendMessage(id, "🔕 تم كتم هذا الإيميل");
   }
 
-  // 👑 إعلان
   if (q.data === "admin_bc" && admins.includes(id)) {
     waitingBroadcast = true;
     bot.sendMessage(id, "📢 اكتب الإعلان");
   }
 
-  // 👑 إضافة أدمن
   if (q.data === "admin_add" && id == MAIN_ADMIN) {
     waitingAdminAdd[id] = true;
     bot.sendMessage(id, "➕ ارسل ID");
   }
 
-  // 👑 قناة
   if (q.data === "admin_setch" && admins.includes(id)) {
     waitingChannel[id] = true;
     bot.sendMessage(id, "📌 ارسل @channel");
@@ -182,7 +183,6 @@ bot.on("callback_query", async (q) => {
 bot.on("message", async (msg) => {
   const id = msg.chat.id;
 
-  // إعلان
   if (waitingBroadcast && admins.includes(id)) {
     waitingBroadcast = false;
     for (let u in users) {
@@ -191,7 +191,6 @@ bot.on("message", async (msg) => {
     bot.sendMessage(id, "✅ تم");
   }
 
-  // إضافة أدمن
   if (waitingAdminAdd[id]) {
     const newAdmin = parseInt(msg.text);
     admins.push(newAdmin);
@@ -201,14 +200,12 @@ bot.on("message", async (msg) => {
     bot.sendMessage(newAdmin, "👑 تم ترقيتك إلى أدمن\nاكتب /admin");
   }
 
-  // قناة
   if (waitingChannel[id]) {
     channel = msg.text;
     delete waitingChannel[id];
     bot.sendMessage(id, "✅ تم");
   }
 
-  // نقل
   if (waitingTransfer[id]) {
     const target = msg.text;
 
@@ -225,7 +222,6 @@ bot.on("message", async (msg) => {
     );
   }
 
-  // إنشاء تلقائي
   if (!msg.text.startsWith("/") && !users[id]) {
     try {
       const domainRes = await axios.get("https://api.mail.tm/domains");
