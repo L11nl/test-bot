@@ -21,7 +21,7 @@ let channelLink = null;
 
 // ================== أدوات ==================
 function pass() {
-  return Math.random().toString(36).slice(-10);
+  return Math.random().toString(36).slice(-12) + Math.random().toString(36).slice(-6);
 }
 
 function isAdmin(id) {
@@ -66,8 +66,7 @@ function menu(id) {
           { text: "📂 إيميلاتي", callback_data: "my" }
         ],
         [
-          { text: "📊 حسابي", callback_data: "info" },
-          { text: "🔄 تحديث", callback_data: "refresh" }
+          { text: "📊 حسابي", callback_data: "info" }
         ],
         [
           { text: "📤 نقل", callback_data: "transfer" },
@@ -105,7 +104,6 @@ bot.onText(/\/admin/, (msg) => {
 bot.on("callback_query", async (q) => {
   const id = q.message.chat.id;
 
-  // تحقق اشتراك
   if (q.data === "check") {
     if (await checkJoin(id)) {
       bot.sendMessage(id, "✅ تم التحقق");
@@ -115,13 +113,11 @@ bot.on("callback_query", async (q) => {
     }
   }
 
-  // إنشاء
   if (q.data === "create") {
     waiting[id] = "create";
-    bot.sendMessage(id, "✍️ اكتب اسم الإيميل:");
+    bot.sendMessage(id, "✍️ اكتب اسم للإيميل أو ارسل /skip لإنشاء عشوائي:");
   }
 
-  // عرض الإيميلات
   if (q.data === "my") {
     const u = users[id];
     if (!u || u.emails.length === 0)
@@ -141,15 +137,9 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // معلومات
   if (q.data === "info") {
     const count = users[id]?.emails?.length || 0;
     bot.sendMessage(id, `👤 ID: ${id}\n📧 عدد الإيميلات: ${count}`);
-  }
-
-  if (q.data === "refresh") {
-    bot.sendMessage(id, "🔄 تم التحديث");
-    menu(id);
   }
 
   if (q.data === "delete") {
@@ -201,6 +191,8 @@ bot.on("message", async (msg) => {
 
   if (!(await forceJoin(msg))) return;
 
+  if (!text) return;
+
   // تعيين قناة
   if (waiting[id] === "set_channel") {
     channel = text;
@@ -215,7 +207,14 @@ bot.on("message", async (msg) => {
       const domainRes = await axios.get("https://api.mail.tm/domains");
       const domain = domainRes.data["hydra:member"][0].domain;
 
-      const name = text.toLowerCase().replace(/[^a-z0-9]/g, "");
+      let name;
+
+      if (text === "/skip") {
+        name = Math.random().toString(36).slice(2,10);
+      } else {
+        name = text.toLowerCase().replace(/[^a-z0-9]/g, "");
+      }
+
       const email = `${name}@${domain}`;
       const password = pass();
 
@@ -231,7 +230,14 @@ bot.on("message", async (msg) => {
         last: []
       });
 
-      bot.sendMessage(id, `📧 ${email}\n🔐 ${password}`);
+      bot.sendMessage(id,
+`📧 الإيميل:
+\`${email}\`
+
+🔐 الباسورد:
+\`${password}\`
+`, { parse_mode: "Markdown" });
+
       waiting[id] = null;
 
     } catch {
@@ -266,8 +272,24 @@ bot.on("message", async (msg) => {
     users[text].emails.push(email);
     users[id].emails.splice(data.index, 1);
 
+    const userInfo = msg.from;
+
     bot.sendMessage(id, "✅ تم النقل");
-    bot.sendMessage(text, `📥 وصلك إيميل:\n${email.email}`);
+
+    bot.sendMessage(text,
+`📥 تم نقل إيميل لك
+
+📧 الإيميل:
+\`${email.email}\`
+
+🔐 الباسورد:
+\`${email.password}\`
+
+👤 من المستخدم:
+الاسم: ${userInfo.first_name || "لا يوجد"}
+اليوزر: @${userInfo.username || "لا يوجد"}
+ID: ${userInfo.id}
+`, { parse_mode: "Markdown" });
 
     waiting[id] = null;
   }
@@ -306,7 +328,27 @@ setInterval(async () => {
 
         for (let m of res.data["hydra:member"]) {
           if (!e.last.includes(m.id)) {
-            bot.sendMessage(id, `📨 من: ${m.from.address}\n📩 ${m.subject}`);
+
+            const full = await axios.get(`https://api.mail.tm/messages/${m.id}`, {
+              headers: { Authorization: `Bearer ${e.apiToken}` }
+            });
+
+            const content =
+              full.data.text ||
+              full.data.html ||
+              "لا يوجد محتوى";
+
+            bot.sendMessage(id,
+`📨 رسالة جديدة
+
+📧 إلى: ${e.email}
+👤 من: ${m.from.address}
+📌 العنوان: ${m.subject}
+
+📩 المحتوى:
+${content}
+`);
+
             e.last.push(m.id);
           }
         }
