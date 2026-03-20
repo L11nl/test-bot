@@ -1,25 +1,8 @@
 /*
 ================= IMPORTANT SYSTEM NOTICE ==================
 
-⚠️ هذا المشروع يحتوي على بيانات مستخدمين مهمة جداً (إيميلات - كلمات مرور - أدمن).
-
-🚫 ممنوع حذف أو إعادة تعيين أي من هذه البيانات:
-- users (بيانات المستخدمين)
-- admins (قائمة الأدمن)
-- settings (الإعدادات)
-- data.json (ملف التخزين)
-
-🔒 عند التعديل أو التحديث:
-✔️ قم بتحديث الكود فقط
-✔️ حافظ على نفس هيكل قاعدة البيانات
-✔️ لا تقم بإعادة تهيئة المتغيرات
-✔️ لا تحذف الملف data.json
-✔️ لا تغير أسماء المفاتيح داخل البيانات
-
-❗ أي تعديل يؤدي إلى حذف البيانات يعتبر خطأ جسيم
-
-🎯 الهدف:
-تحديث البوت بدون فقدان أي بيانات مستخدمين أو إيميلات أو صلاحيات
+⚠️ لا تحذف البيانات (users / admins / settings / data.json)
+✔️ فقط قم بتحديث الكود
 
 ===========================================================
 */
@@ -50,7 +33,6 @@ function saveDB() {
 
 let db = loadDB();
 
-// حماية إضافية
 if (!db.users) db.users = {};
 if (!db.admins) db.admins = [];
 if (!db.settings) db.settings = {};
@@ -62,7 +44,6 @@ if (!db.admins.includes(MAIN_ADMIN)) db.admins.push(MAIN_ADMIN);
 
 let users = db.users;
 let admins = db.admins;
-
 let settings = db.settings;
 
 let waiting = {};
@@ -86,8 +67,8 @@ function validName(name){
 
 // ================== الاشتراك ==================
 async function checkJoin(id) {
-  if (!settings.forceSub || !settings.channel) return true;
   try {
+    if (!settings.forceSub || !settings.channel) return true;
     const res = await bot.getChatMember(settings.channel, id);
     return ["member","administrator","creator"].includes(res.status);
   } catch {
@@ -96,32 +77,43 @@ async function checkJoin(id) {
 }
 
 async function forceJoin(msg) {
+  const id = msg.chat.id;
+
   if (!settings.forceSub || !settings.channel) return true;
 
-  if (!(await checkJoin(msg.chat.id))) {
-    bot.sendMessage(msg.chat.id,
+  if (waiting[id] === "join_block") return false;
+
+  const joined = await checkJoin(id);
+
+  if (!joined) {
+    waiting[id] = "join_block";
+
+    bot.sendMessage(id,
 `⚠️ يجب الاشتراك في القناة أولاً
 
-اضغط على زر الاشتراك ثم تحقق`,
+1- اضغط على زر الاشتراك
+2- ثم اضغط تحقق`,
 {
   reply_markup: {
     inline_keyboard: [
-      [{ text: "📢 الاشتراك في القناة", url: settings.channelLink }],
-      [{ text: "🔍 تحقق", callback_data: "check" }]
+      [{ text: "📢 الاشتراك", url: settings.channelLink }],
+      [{ text: "✅ تحقق", callback_data: "check" }]
     ]
   }
 });
+
     return false;
   }
+
+  if (waiting[id] === "join_block") delete waiting[id];
+
   return true;
 }
 
 // ================== القائمة ==================
 function menu(id) {
   bot.sendMessage(id,
-`📋 القائمة الرئيسية
-
-اختر أحد الخيارات التالية:`,
+`📋 القائمة الرئيسية`,
 {
     reply_markup: {
       inline_keyboard: [
@@ -139,9 +131,6 @@ bot.onText(/\/start/, async (msg) => {
 
   if (!(await forceJoin(msg))) return;
 
-  if (settings.welcome)
-    bot.sendMessage(id, settings.welcome);
-
   menu(id);
 });
 
@@ -151,7 +140,7 @@ bot.onText(/\/admin/, (msg) => {
   if (!isAdmin(id)) return;
 
   bot.sendMessage(id,
-`👑 لوحة تحكم الإدارة`,
+`👑 لوحة الإدارة`,
 {
     reply_markup: {
       inline_keyboard: [
@@ -160,8 +149,8 @@ bot.onText(/\/admin/, (msg) => {
           { text: "✅ تفعيل الاشتراك", callback_data: "enable_sub" },
           { text: "❌ تعطيل الاشتراك", callback_data: "disable_sub" }
         ],
-        [{ text: "👥 إدارة الأدمن", callback_data: "admins" }],
-        [{ text: "📢 إرسال إذاعة", callback_data: "broadcast" }]
+        [{ text: "👥 الأدمن", callback_data: "admins" }],
+        [{ text: "📢 إذاعة", callback_data: "broadcast" }]
       ]
     }
   });
@@ -173,9 +162,14 @@ bot.on("callback_query", async (q) => {
   const data = q.data;
 
   if (data === "check") {
-    if (await checkJoin(id)) {
-      bot.sendMessage(id, "✅ تم التحقق من الاشتراك");
+    const joined = await checkJoin(id);
+
+    if (joined) {
+      delete waiting[id];
+      bot.sendMessage(id, "✅ تم التحقق بنجاح");
       menu(id);
+    } else {
+      bot.sendMessage(id, "❌ لم يتم التحقق، تأكد من الاشتراك");
     }
   }
 
@@ -185,31 +179,31 @@ bot.on("callback_query", async (q) => {
 
   if (data === "support") {
     waiting[id] = "support";
-    bot.sendMessage(id,"✍️ اكتب رسالتك وسيتم الرد عليك:");
+    bot.sendMessage(id,"✍️ اكتب رسالتك:");
   }
 
   if (data === "set_channel") {
     waiting[id] = "set_channel";
-    bot.sendMessage(id,"📌 أرسل رابط القناة أو المعرف (@channel)");
+    bot.sendMessage(id,"📌 ارسل معرف القناة مثل @channel");
   }
 
   if (data === "enable_sub") {
     settings.forceSub = true;
     saveDB();
-    bot.sendMessage(id,"✅ تم تفعيل الاشتراك الإجباري");
+    bot.sendMessage(id,"✅ تم التفعيل");
   }
 
   if (data === "disable_sub") {
     settings.forceSub = false;
     saveDB();
-    bot.sendMessage(id,"❌ تم تعطيل الاشتراك الإجباري");
+    bot.sendMessage(id,"❌ تم الإلغاء");
   }
 
   if (data === "admins") {
     if (id !== MAIN_ADMIN) return;
 
     admins.forEach(a=>{
-      bot.sendMessage(id,`👤 ID: ${a}`,{
+      bot.sendMessage(id,`👤 ${a}`,{
         reply_markup:{
           inline_keyboard:[
             [
@@ -222,28 +216,75 @@ bot.on("callback_query", async (q) => {
     });
   }
 
+  if (data === "my") {
+    if (!users[id]) users[id] = { emails: [] };
+
+    const list = users[id].emails || [];
+
+    if (list.length === 0)
+      return bot.sendMessage(id, "📭 لا يوجد إيميلات");
+
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+
+      bot.sendMessage(id,
+`📧 البريد:
+${e.email}
+
+🔐 كلمة المرور:
+${e.password}`,
+{
+  reply_markup:{
+    inline_keyboard:[
+      [
+        { text:"🗑️ حذف", callback_data:`del_${i}` },
+        { text:"📤 نقل", callback_data:`tran_${i}` },
+        { text:"🔇 كتم", callback_data:`mute_${i}` }
+      ]
+    ]
+  }
+});
+    }
+  }
+
+  if (data.startsWith("del_")) {
+    const i = data.split("_")[1];
+    users[id].emails.splice(i,1);
+    saveDB();
+    bot.sendMessage(id,"🗑️ تم الحذف");
+  }
+
+  if (data.startsWith("tran_")) {
+    waiting[id] = { type:"transfer", index:data.split("_")[1] };
+    bot.sendMessage(id,"📨 ارسل ID المستخدم");
+  }
+
+  if (data.startsWith("mute_")) {
+    const i = data.split("_")[1];
+    users[id].emails[i].mute = !users[id].emails[i].mute;
+    saveDB();
+    bot.sendMessage(id,"🔇 تم التغيير");
+  }
+
   if (data.startsWith("msg_")) {
     const target = data.split("_")[1];
     waiting[id] = { type:"admin_msg", to:target };
-    bot.sendMessage(id,"✍️ اكتب الرسالة:");
+    bot.sendMessage(id,"✍️ اكتب الرسالة");
   }
 
   if (data.startsWith("rem_")) {
     const target = Number(data.split("_")[1]);
-    if (target === MAIN_ADMIN)
-      return bot.sendMessage(id,"❌ لا يمكن حذف المنشئ الأساسي");
-
+    if (target === MAIN_ADMIN) return bot.sendMessage(id,"❌ لا يمكن");
     admins = admins.filter(a=>a!==target);
     db.admins = admins;
     saveDB();
-    bot.sendMessage(id,"✅ تم حذف الأدمن");
+    bot.sendMessage(id,"✅ تم");
   }
 
   if (data.startsWith("reply_")) {
-    const adminId = id;
     const userId = data.split("_")[1];
-    waiting[adminId] = { type:"reply_user", to:userId };
-    bot.sendMessage(adminId,"✍️ اكتب الرد:");
+    waiting[id] = { type:"reply_user", to:userId };
+    bot.sendMessage(id,"✍️ اكتب الرد");
   }
 });
 
@@ -282,9 +323,9 @@ ${password}`);
 
   } catch (err){
     if (err.response?.status === 422)
-      bot.sendMessage(id,"⚠️ الاسم مستخدم، جرب اسم آخر");
+      bot.sendMessage(id,"⚠️ الاسم مستخدم جرب اسم آخر");
     else
-      bot.sendMessage(id,"❌ حدث خطأ أثناء الإنشاء");
+      bot.sendMessage(id,"❌ خطأ");
   }
 }
 
@@ -300,7 +341,7 @@ bot.on("message", async (msg)=>{
 
   if (waiting[id]==="set_channel"){
     settings.channel = text;
-    settings.channelLink = text.startsWith("http") ? text : `https://t.me/${text.replace("@","")}`;
+    settings.channelLink = `https://t.me/${text.replace("@","")}`;
     waiting[id]=null;
     saveDB();
     return bot.sendMessage(id,"✅ تم حفظ القناة");
@@ -324,12 +365,12 @@ ${text}`,{
     });
 
     waiting[id]=null;
-    return bot.sendMessage(id,"✅ تم إرسال رسالتك");
+    return bot.sendMessage(id,"✅ تم الإرسال");
   }
 
   if (waiting[id]?.type==="reply_user"){
     bot.sendMessage(waiting[id].to,
-`📩 رد من الدعم:
+`📩 رد الدعم:
 
 ${text}`);
     waiting[id]=null;
@@ -341,6 +382,26 @@ ${text}`);
 `📩 رسالة من الإدارة:
 
 ${text}`);
+    waiting[id]=null;
+    return;
+  }
+
+  if (waiting[id]?.type==="transfer") {
+    const data = waiting[id];
+    const email = users[id].emails[data.index];
+
+    if (!users[text]) users[text]={ emails:[] };
+
+    users[text].emails.push(email);
+    users[id].emails.splice(data.index,1);
+
+    bot.sendMessage(text,
+`📥 تم نقل إيميل لك
+
+${email.email}
+${email.password}`);
+
+    saveDB();
     waiting[id]=null;
     return;
   }
@@ -366,17 +427,16 @@ setInterval(async ()=>{
               headers:{ Authorization:`Bearer ${e.apiToken}` }
             });
 
-            const content = full.data.text || full.data.html || "لا يوجد محتوى";
+            const content = full.data.text || full.data.html || "لا يوجد";
 
             bot.sendMessage(id,
 `📨 رسالة جديدة
 
-📧 البريد: ${e.email}
-👤 المرسل: ${m.from.address}
-📌 العنوان: ${m.subject}
+📧 ${e.email}
+👤 ${m.from.address}
+📌 ${m.subject}
 
-📩 الرسالة:
-${content}`);
+📩 ${content}`);
 
             e.last.push(m.id);
             saveDB();
