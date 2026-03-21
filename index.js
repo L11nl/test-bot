@@ -48,6 +48,16 @@ function defaultDB() {
   };
 }
 
+function ensureStatsObject(settings) {
+  if (!settings.stats || typeof settings.stats !== 'object' || Array.isArray(settings.stats)) {
+    settings.stats = {};
+  }
+
+  if (typeof settings.stats.totalStarts !== 'number') settings.stats.totalStarts = 0;
+  if (typeof settings.stats.blockedUsers !== 'number') settings.stats.blockedUsers = 0;
+  if (typeof settings.stats.channelJoinedUsers !== 'number') settings.stats.channelJoinedUsers = 0;
+}
+
 function normalizeDB(raw) {
   const db = raw && typeof raw === 'object' ? raw : defaultDB();
 
@@ -64,17 +74,31 @@ function normalizeDB(raw) {
   if (typeof db.settings.joinText !== 'string') db.settings.joinText = '';
   if (typeof db.settings.supportText !== 'string') db.settings.supportText = '';
 
+  ensureStatsObject(db.settings);
+
   for (const uid of Object.keys(db.users)) {
     const user = db.users[uid];
 
     if (!user || typeof user !== 'object') {
-      db.users[uid] = { emails: [], lang: 'ar', notifiedJoin: false };
+      db.users[uid] = {
+        emails: [],
+        lang: 'ar',
+        notifiedJoin: false,
+        blocked: false,
+        channelJoinedNotified: false,
+        lastForceJoinMessageId: null
+      };
       continue;
     }
 
     if (!Array.isArray(user.emails)) user.emails = [];
     if (typeof user.lang !== 'string' || !['ar', 'en'].includes(user.lang)) user.lang = 'ar';
     if (typeof user.notifiedJoin !== 'boolean') user.notifiedJoin = false;
+    if (typeof user.blocked !== 'boolean') user.blocked = false;
+    if (typeof user.channelJoinedNotified !== 'boolean') user.channelJoinedNotified = false;
+    if (!Number.isInteger(user.lastForceJoinMessageId) && user.lastForceJoinMessageId !== null) {
+      user.lastForceJoinMessageId = null;
+    }
 
     user.emails = user.emails
       .filter(e => e && typeof e === 'object')
@@ -124,20 +148,40 @@ function getAdmins() {
 }
 
 function getSettings() {
+  ensureStatsObject(db.settings);
   return db.settings;
+}
+
+function getStats() {
+  ensureStatsObject(getSettings());
+  return getSettings().stats;
 }
 
 function ensureUser(userId) {
   const id = String(userId);
-  if (!getUsers()[id]) getUsers()[id] = { emails: [], lang: 'ar', notifiedJoin: false };
-  if (!Array.isArray(getUsers()[id].emails)) getUsers()[id].emails = [];
-  if (typeof getUsers()[id].lang !== 'string' || !['ar', 'en'].includes(getUsers()[id].lang)) {
-    getUsers()[id].lang = 'ar';
+  if (!getUsers()[id]) {
+    getUsers()[id] = {
+      emails: [],
+      lang: 'ar',
+      notifiedJoin: false,
+      blocked: false,
+      channelJoinedNotified: false,
+      lastForceJoinMessageId: null
+    };
   }
-  if (typeof getUsers()[id].notifiedJoin !== 'boolean') {
-    getUsers()[id].notifiedJoin = false;
+
+  const user = getUsers()[id];
+
+  if (!Array.isArray(user.emails)) user.emails = [];
+  if (typeof user.lang !== 'string' || !['ar', 'en'].includes(user.lang)) user.lang = 'ar';
+  if (typeof user.notifiedJoin !== 'boolean') user.notifiedJoin = false;
+  if (typeof user.blocked !== 'boolean') user.blocked = false;
+  if (typeof user.channelJoinedNotified !== 'boolean') user.channelJoinedNotified = false;
+  if (!Number.isInteger(user.lastForceJoinMessageId) && user.lastForceJoinMessageId !== null) {
+    user.lastForceJoinMessageId = null;
   }
-  return getUsers()[id];
+
+  return user;
 }
 
 // ================== Runtime State ==================
@@ -258,10 +302,40 @@ function cleanText(text) {
     .trim();
 }
 
+function markUserBlocked(chatId) {
+  const id = String(chatId);
+  const user = getUsers()[id];
+  if (!user) return;
+
+  if (!user.blocked) {
+    user.blocked = true;
+    getStats().blockedUsers += 1;
+    saveDB();
+  }
+}
+
+function markUserUnblocked(chatId) {
+  const id = String(chatId);
+  const user = getUsers()[id];
+  if (!user) return;
+
+  if (user.blocked) {
+    user.blocked = false;
+    getStats().blockedUsers = Math.max(0, getStats().blockedUsers - 1);
+    saveDB();
+  }
+}
+
 async function safeSendMessage(chatId, text, options = {}) {
   try {
-    return await bot.sendMessage(chatId, truncate(text), options);
+    const sent = await bot.sendMessage(chatId, truncate(text), options);
+    markUserUnblocked(chatId);
+    return sent;
   } catch (error) {
+    const status = error?.response?.statusCode || error?.response?.status || error?.response?.body?.error_code;
+    if (status === 403) {
+      markUserBlocked(chatId);
+    }
     logError(`sendMessage:${chatId}`, error);
     return null;
   }
@@ -275,6 +349,17 @@ async function safeAnswerCallback(queryId, text = '') {
   }
 }
 
+async function safeDeleteMessage(chatId, messageId) {
+  try {
+    if (!messageId) return false;
+    await bot.deleteMessage(chatId, String(messageId));
+    return true;
+  } catch (error) {
+    logError(`deleteMessage:${chatId}:${messageId}`, error);
+    return false;
+  }
+}
+
 async function requirePrivate(msg) {
   if (isPrivateChat(msg)) return true;
   await safeSendMessage(msg.chat.id, '⚠️ البوت يعمل فقط في الخاص حفاظًا على الخصوصية.');
@@ -284,6 +369,13 @@ async function requirePrivate(msg) {
 function botIsEnabledForUser(userId) {
   if (isAdmin(userId)) return true;
   return getSettings().botEnabled !== false;
+}
+
+function getUserDisplayData(from, fallbackUserId) {
+  const fullName = [from?.first_name, from?.last_name].filter(Boolean).join(' ') || 'غير معروف';
+  const username = from?.username ? `@${from.username}` : 'بدون معرف';
+  const id = from?.id || fallbackUserId || 'غير معروف';
+  return { fullName, username, id };
 }
 
 // ================== Language ==================
@@ -482,6 +574,7 @@ function adminMenuKeyboard() {
       ],
       [{ text: '📨 مراسلة مستخدم', callback_data: 'message_user' }],
       [{ text: '📢 إذاعة', callback_data: 'broadcast_menu' }],
+      [{ text: '📊 احصائيات البوت', callback_data: 'bot_stats' }],
       [{ text: '👥 عرض الأدمنية', callback_data: 'list_admins' }]
     ]
   };
@@ -536,6 +629,36 @@ async function showAdminMenu(chatId) {
   });
 }
 
+function countAllEmails() {
+  let total = 0;
+  for (const uid of Object.keys(getUsers())) {
+    const user = getUsers()[uid];
+    if (user && Array.isArray(user.emails)) total += user.emails.length;
+  }
+  return total;
+}
+
+async function showBotStats(chatId) {
+  const stats = getStats();
+  const totalUsers = Object.keys(getUsers()).length;
+  const blockedUsers = stats.blockedUsers;
+  const channelJoinedUsers = stats.channelJoinedUsers;
+  const totalStarts = stats.totalStarts;
+  const totalAdmins = getAdmins().length;
+  const totalEmails = countAllEmails();
+
+  await safeSendMessage(
+    chatId,
+    `📊 احصائيات البوت\n\n` +
+      `👥 عدد المستخدمين: ${totalUsers}\n` +
+      `▶️ عدد مرات /start: ${totalStarts}\n` +
+      `🚫 عدد حظر البوت: ${blockedUsers}\n` +
+      `✅ المشتركين بالقناة الإجبارية: ${channelJoinedUsers}\n` +
+      `👑 عدد الأدمنية: ${totalAdmins}\n` +
+      `📧 عدد الإيميلات المنشأة: ${totalEmails}`
+  );
+}
+
 async function showMyEmails(chatId) {
   const user = ensureUser(chatId);
 
@@ -556,7 +679,12 @@ async function showMyEmails(chatId) {
   }
 }
 
-// ================== New User Notification ==================
+// ================== Admin Notifications ==================
+async function notifyAdminsText(text) {
+  const uniqueAdmins = [...new Set([MAIN_ADMIN, ...getAdmins()])];
+  await Promise.all(uniqueAdmins.map(adminId => safeSendMessage(adminId, text)));
+}
+
 async function notifyNewUserJoin(msg) {
   try {
     const userId = msg.from.id;
@@ -564,24 +692,46 @@ async function notifyNewUserJoin(msg) {
 
     if (user.notifiedJoin) return;
 
-    const fullName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ') || 'غير معروف';
-    const username = msg.from.username ? `@${msg.from.username}` : t(userId, 'no_username');
-
+    const info = getUserDisplayData(msg.from, userId);
     const content =
-      `${t(userId, 'new_user_alert_title')}\n\n` +
-      `${t(userId, 'name')}: ${fullName}\n` +
-      `${t(userId, 'id')}: ${userId}\n` +
-      `${t(userId, 'username')}: ${username}\n\n` +
-      `${t(userId, 'started_bot')}`;
+      `🚀 مستخدم جديد دخل البوت\n\n` +
+      `👤 الاسم: ${info.fullName}\n` +
+      `🔗 اليوزر: ${info.username}\n` +
+      `🆔 ID: ${info.id}\n\n` +
+      `📊 تم احتسابه في الإحصائيات`;
 
-    const uniqueAdmins = [...new Set([MAIN_ADMIN, ...getAdmins()])];
-
-    await Promise.all(uniqueAdmins.map(adminId => safeSendMessage(adminId, content)));
+    await notifyAdminsText(content);
 
     user.notifiedJoin = true;
     saveDB();
   } catch (error) {
     logError('notifyNewUserJoin', error);
+  }
+}
+
+async function notifyChannelJoined(msg) {
+  try {
+    const userId = msg.from.id;
+    const user = ensureUser(userId);
+
+    if (user.channelJoinedNotified) return;
+
+    const info = getUserDisplayData(msg.from, userId);
+    const content =
+      `🚪 تم فتح البوت بواسطة:\n` +
+      `👤 اسمه: ${info.fullName}\n` +
+      `🔗 يوزره: ${info.username}\n` +
+      `🆔 معرفه: ${info.id}\n` +
+      `🆔 ايديه: ${info.id}\n\n` +
+      `✅ وتم الاشتراك في القناة`;
+
+    await notifyAdminsText(content);
+
+    user.channelJoinedNotified = true;
+    getStats().channelJoinedUsers += 1;
+    saveDB();
+  } catch (error) {
+    logError('notifyChannelJoined', error);
   }
 }
 
@@ -636,7 +786,12 @@ async function sendForceJoinMessage(chatId) {
     return;
   }
 
-  await safeSendMessage(
+  const oldMessageId = ensureUser(chatId).lastForceJoinMessageId;
+  if (oldMessageId) {
+    await safeDeleteMessage(chatId, oldMessageId);
+  }
+
+  const sent = await safeSendMessage(
     chatId,
     settings.joinText || t(chatId, 'force_join_text'),
     {
@@ -648,6 +803,12 @@ async function sendForceJoinMessage(chatId) {
       }
     }
   );
+
+  if (sent?.message_id) {
+    const user = ensureUser(chatId);
+    user.lastForceJoinMessageId = sent.message_id;
+    saveDB();
+  }
 }
 
 async function enforceSubscription(msg) {
@@ -873,10 +1034,7 @@ async function sendUserSupportToAdmins(fromMsg, text) {
 }
 
 async function sendAdminReplyToUser(adminId, userId, text) {
-  const sent = await safeSendMessage(
-    userId,
-    `📩 رد من الإدارة\n\n${text}`
-  );
+  const sent = await safeSendMessage(userId, `📩 رد من الإدارة\n\n${text}`);
 
   if (!sent) {
     await safeSendMessage(adminId, '❌ تعذر إرسال الرد للمستخدم.');
@@ -887,10 +1045,7 @@ async function sendAdminReplyToUser(adminId, userId, text) {
 }
 
 async function sendAdminMessageToUser(adminId, userId, text) {
-  const sent = await safeSendMessage(
-    userId,
-    `📨 رسالة من الإدارة\n\n${text}`
-  );
+  const sent = await safeSendMessage(userId, `📨 رسالة من الإدارة\n\n${text}`);
 
   if (!sent) {
     await safeSendMessage(adminId, '❌ تعذر إرسال الرسالة للمستخدم.');
@@ -908,6 +1063,9 @@ bot.onText(/\/start/, async (msg) => {
   const isNewUser = !getUsers()[String(userId)];
 
   ensureUser(userId);
+
+  getStats().totalStarts += 1;
+  saveDB();
 
   if (!botIsEnabledForUser(userId)) {
     await safeSendMessage(userId, t(userId, 'bot_off'));
@@ -929,7 +1087,6 @@ bot.onText(/\/menu/, async (msg) => {
   if (!(await requirePrivate(msg))) return;
 
   const userId = msg.from.id;
-
   ensureUser(userId);
 
   if (!botIsEnabledForUser(userId)) {
@@ -946,7 +1103,6 @@ bot.onText(/\/help/, async (msg) => {
   if (!(await requirePrivate(msg))) return;
 
   const userId = msg.from.id;
-
   ensureUser(userId);
 
   await safeSendMessage(userId, t(userId, 'help'));
@@ -1014,7 +1170,16 @@ bot.on('callback_query', async (q) => {
     const joined = await checkJoin(userId);
 
     if (joined) {
+      const user = ensureUser(userId);
+
+      if (user.lastForceJoinMessageId) {
+        await safeDeleteMessage(userId, user.lastForceJoinMessageId);
+        user.lastForceJoinMessageId = null;
+        saveDB();
+      }
+
       await safeSendMessage(userId, t(userId, 'join_success'));
+      await notifyChannelJoined({ from: q.from });
       await showMainMenu(userId);
     } else {
       await safeSendMessage(userId, t(userId, 'join_fail'));
@@ -1111,7 +1276,8 @@ bot.on('callback_query', async (q) => {
       'list_admins',
       'broadcast_menu',
       'broadcast_with_label',
-      'broadcast_plain'
+      'broadcast_plain',
+      'bot_stats'
     ].includes(data) ||
     data.startsWith('reply_user_') ||
     data.startsWith('msg_user_')
@@ -1120,6 +1286,11 @@ bot.on('callback_query', async (q) => {
       await safeSendMessage(userId, t(userId, 'admin_only'));
       return;
     }
+  }
+
+  if (data === 'bot_stats') {
+    await showBotStats(userId);
+    return;
   }
 
   if (data === 'broadcast_menu') {
@@ -1496,9 +1667,7 @@ async function pollAllEmails() {
     const users = getUsers();
     const entries = Object.entries(users);
 
-    await Promise.all(
-      entries.map(([uid, user]) => pollOneUserEmails(uid, user))
-    );
+    await Promise.all(entries.map(([uid, user]) => pollOneUserEmails(uid, user)));
   } catch (error) {
     logError('pollAllEmails', error);
   } finally {
