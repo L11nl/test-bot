@@ -192,7 +192,6 @@ function randomName(length = 10) {
   return out;
 }
 
-// باسوردات أسهل كما طلبت
 function easyPassword() {
   const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const lower = 'abcdefghijklmnopqrstuvwxyz';
@@ -216,11 +215,8 @@ function normalizeChannel(input) {
   const value = String(input || '').trim();
 
   if (!value) return '';
-
   if (/^-100\d+$/.test(value)) return value;
-
   if (value.startsWith('@')) return value;
-
   if (/^[a-zA-Z0-9_]{4,}$/.test(value)) return `@${value}`;
 
   const publicMatch = value.match(/^https?:\/\/t\.me\/([a-zA-Z0-9_]{4,})\/?$/i);
@@ -485,7 +481,17 @@ function adminMenuKeyboard() {
         { text: '➖ إزالة أدمن', callback_data: 'remove_admin' }
       ],
       [{ text: '📨 مراسلة مستخدم', callback_data: 'message_user' }],
+      [{ text: '📢 إذاعة', callback_data: 'broadcast_menu' }],
       [{ text: '👥 عرض الأدمنية', callback_data: 'list_admins' }]
+    ]
+  };
+}
+
+function broadcastMenuKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '📢 إذاعة مع كلمة إعلان', callback_data: 'broadcast_with_label' }],
+      [{ text: '✉️ إذاعة بدون كلمة إعلان', callback_data: 'broadcast_plain' }]
     ]
   };
 }
@@ -577,6 +583,32 @@ async function notifyNewUserJoin(msg) {
   } catch (error) {
     logError('notifyNewUserJoin', error);
   }
+}
+
+// ================== Broadcast ==================
+async function sendBroadcastToAllUsers(adminId, text, withLabel) {
+  const users = getUsers();
+  const ids = Object.keys(users);
+
+  if (!ids.length) {
+    await safeSendMessage(adminId, '⚠️ لا يوجد مستخدمون للإذاعة.');
+    return;
+  }
+
+  let sent = 0;
+  let failed = 0;
+  const finalText = withLabel ? `📢 إعلان:\n\n${text}` : text;
+
+  for (const uid of ids) {
+    const ok = await safeSendMessage(uid, finalText);
+    if (ok) sent += 1;
+    else failed += 1;
+  }
+
+  await safeSendMessage(
+    adminId,
+    `✅ انتهت الإذاعة.\n\n📬 تم الإرسال: ${sent}\n❌ فشل: ${failed}`
+  );
 }
 
 // ================== Subscription ==================
@@ -1076,7 +1108,10 @@ bot.on('callback_query', async (q) => {
       'add_admin',
       'remove_admin',
       'message_user',
-      'list_admins'
+      'list_admins',
+      'broadcast_menu',
+      'broadcast_with_label',
+      'broadcast_plain'
     ].includes(data) ||
     data.startsWith('reply_user_') ||
     data.startsWith('msg_user_')
@@ -1085,6 +1120,25 @@ bot.on('callback_query', async (q) => {
       await safeSendMessage(userId, t(userId, 'admin_only'));
       return;
     }
+  }
+
+  if (data === 'broadcast_menu') {
+    await safeSendMessage(userId, '📢 اختر نوع الإذاعة:', {
+      reply_markup: broadcastMenuKeyboard()
+    });
+    return;
+  }
+
+  if (data === 'broadcast_with_label') {
+    setState(userId, { type: 'broadcast_with_label' });
+    await safeSendMessage(userId, '📢 أرسل الآن نص الإعلان، وسيصل للمستخدمين بهذه الصيغة:\n\nإعلان:\nنصك');
+    return;
+  }
+
+  if (data === 'broadcast_plain') {
+    setState(userId, { type: 'broadcast_plain' });
+    await safeSendMessage(userId, '✉️ أرسل الآن نص الرسالة، وسيصل للمستخدمين كما كتبته بدون كلمة إعلان.');
+    return;
   }
 
   if (data === 'set_channel') {
@@ -1186,7 +1240,6 @@ bot.on('message', async (msg) => {
 
     const state = getState(userId);
 
-    // الأدمن يقدر يدخل دائمًا
     if (!botIsEnabledForUser(userId)) {
       await safeSendMessage(userId, t(userId, 'bot_off'));
       return;
@@ -1323,6 +1376,28 @@ bot.on('message', async (msg) => {
       return;
     }
 
+    if (state?.type === 'broadcast_with_label') {
+      if (!isAdmin(userId)) {
+        clearState(userId);
+        return;
+      }
+
+      await sendBroadcastToAllUsers(userId, text, true);
+      clearState(userId);
+      return;
+    }
+
+    if (state?.type === 'broadcast_plain') {
+      if (!isAdmin(userId)) {
+        clearState(userId);
+        return;
+      }
+
+      await sendBroadcastToAllUsers(userId, text, false);
+      clearState(userId);
+      return;
+    }
+
     // ===== User states =====
     if (state?.type === 'support_message') {
       await sendUserSupportToAdmins(msg, text);
@@ -1337,7 +1412,6 @@ bot.on('message', async (msg) => {
     }
 
     // ===== Default behavior =====
-    // إذا أرسل المستخدم أحرف/أرقام إنجليزية فقط -> إنشاء بريد بنفس النص
     if (onlyEnglishLettersOrNumbers(text)) {
       await createEmail(userId, text.toLowerCase());
       return;
