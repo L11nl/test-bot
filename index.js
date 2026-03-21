@@ -35,7 +35,7 @@ app.listen(PORT, () => {
 const DB_FILE = path.join(__dirname, 'data.json');
 const MAIN_ADMIN = 643309456;
 const MAIL_TM_BASE = 'https://api.mail.tm';
-const POLL_INTERVAL_MS = 15000;
+const POLL_INTERVAL_MS = 4000;
 const TELEGRAM_LIMIT = 4096;
 const MAX_LAST_MESSAGES = 100;
 
@@ -570,9 +570,7 @@ async function notifyNewUserJoin(msg) {
 
     const uniqueAdmins = [...new Set([MAIN_ADMIN, ...getAdmins()])];
 
-    for (const adminId of uniqueAdmins) {
-      await safeSendMessage(adminId, content);
-    }
+    await Promise.all(uniqueAdmins.map(adminId => safeSendMessage(adminId, content)));
 
     user.notifiedJoin = true;
     saveDB();
@@ -892,7 +890,6 @@ bot.onText(/\/start/, async (msg) => {
     await notifyNewUserJoin(msg);
   }
 
-  await showLanguageMenu(userId);
   await showMainMenu(userId);
 });
 
@@ -900,6 +897,7 @@ bot.onText(/\/menu/, async (msg) => {
   if (!(await requirePrivate(msg))) return;
 
   const userId = msg.from.id;
+
   ensureUser(userId);
 
   if (!botIsEnabledForUser(userId)) {
@@ -916,6 +914,7 @@ bot.onText(/\/help/, async (msg) => {
   if (!(await requirePrivate(msg))) return;
 
   const userId = msg.from.id;
+
   ensureUser(userId);
 
   await safeSendMessage(userId, t(userId, 'help'));
@@ -951,7 +950,13 @@ bot.on('callback_query', async (q) => {
 
   ensureUser(userId);
 
-  if (!botIsEnabledForUser(userId) && !isAdmin(userId) && data !== 'check' && !data.startsWith('set_lang_') && data !== 'lang_menu') {
+  if (
+    !botIsEnabledForUser(userId) &&
+    !isAdmin(userId) &&
+    data !== 'check' &&
+    !data.startsWith('set_lang_') &&
+    data !== 'lang_menu'
+  ) {
     await safeSendMessage(userId, t(userId, 'bot_off'));
     return;
   }
@@ -964,14 +969,12 @@ bot.on('callback_query', async (q) => {
   if (data === 'set_lang_ar') {
     setUserLang(userId, 'ar');
     await safeSendMessage(userId, t(userId, 'language_updated_ar'));
-    await showMainMenu(userId);
     return;
   }
 
   if (data === 'set_lang_en') {
     setUserLang(userId, 'en');
     await safeSendMessage(userId, t(userId, 'language_updated_en'));
-    await showMainMenu(userId);
     return;
   }
 
@@ -1360,7 +1363,7 @@ async function pollOneUserEmails(userId, user) {
       const freshIds = [];
       let page = 1;
 
-      while (page <= 3) {
+      while (page <= 2) {
         const data = await fetchMessagesPage(e.apiToken, page);
         const messages = data?.['hydra:member'];
 
@@ -1382,7 +1385,10 @@ async function pollOneUserEmails(userId, user) {
         const full = await fetchMessageDetails(e.apiToken, msgId);
         const sender = full?.from?.address || (getUserLang(userId) === 'en' ? 'Unknown' : 'غير معروف');
         const subject = full?.subject || (getUserLang(userId) === 'en' ? 'No subject' : 'بدون عنوان');
-        const bodyRaw = full?.text || stripHtml(full?.html || '') || (getUserLang(userId) === 'en' ? 'No content' : 'لا يوجد محتوى');
+        const bodyRaw =
+          full?.text ||
+          stripHtml(full?.html || '') ||
+          (getUserLang(userId) === 'en' ? 'No content' : 'لا يوجد محتوى');
         const body = truncate(cleanText(bodyRaw), 2500);
 
         if (getUserLang(userId) === 'en') {
@@ -1414,9 +1420,11 @@ async function pollAllEmails() {
 
   try {
     const users = getUsers();
-    for (const uid of Object.keys(users)) {
-      await pollOneUserEmails(uid, users[uid]);
-    }
+    const entries = Object.entries(users);
+
+    await Promise.all(
+      entries.map(([uid, user]) => pollOneUserEmails(uid, user))
+    );
   } catch (error) {
     logError('pollAllEmails', error);
   } finally {
