@@ -68,11 +68,13 @@ function normalizeDB(raw) {
     const user = db.users[uid];
 
     if (!user || typeof user !== 'object') {
-      db.users[uid] = { emails: [] };
+      db.users[uid] = { emails: [], lang: 'ar', notifiedJoin: false };
       continue;
     }
 
     if (!Array.isArray(user.emails)) user.emails = [];
+    if (typeof user.lang !== 'string' || !['ar', 'en'].includes(user.lang)) user.lang = 'ar';
+    if (typeof user.notifiedJoin !== 'boolean') user.notifiedJoin = false;
 
     user.emails = user.emails
       .filter(e => e && typeof e === 'object')
@@ -127,8 +129,14 @@ function getSettings() {
 
 function ensureUser(userId) {
   const id = String(userId);
-  if (!getUsers()[id]) getUsers()[id] = { emails: [] };
+  if (!getUsers()[id]) getUsers()[id] = { emails: [], lang: 'ar', notifiedJoin: false };
   if (!Array.isArray(getUsers()[id].emails)) getUsers()[id].emails = [];
+  if (typeof getUsers()[id].lang !== 'string' || !['ar', 'en'].includes(getUsers()[id].lang)) {
+    getUsers()[id].lang = 'ar';
+  }
+  if (typeof getUsers()[id].notifiedJoin !== 'boolean') {
+    getUsers()[id].notifiedJoin = false;
+  }
   return getUsers()[id];
 }
 
@@ -282,13 +290,179 @@ function botIsEnabledForUser(userId) {
   return getSettings().botEnabled !== false;
 }
 
+// ================== Language ==================
+function getUserLang(userId) {
+  return ensureUser(userId).lang || 'ar';
+}
+
+function setUserLang(userId, lang) {
+  const user = ensureUser(userId);
+  user.lang = lang === 'en' ? 'en' : 'ar';
+  saveDB();
+}
+
+function t(userId, key) {
+  const lang = getUserLang(userId);
+
+  const texts = {
+    ar: {
+      main_menu: '📋 القائمة الرئيسية',
+      admin_menu: '👑 لوحة الإدارة',
+      create_email: '📧 إنشاء بريد',
+      my_emails: '📂 إيميلاتي',
+      support: '📩 مراسلة الدعم',
+      language: '🌐 تغيير اللغة',
+      choose_language: '🌐 اختر اللغة',
+      language_updated_ar: '✅ تم تغيير اللغة إلى العربية.',
+      language_updated_en: '✅ Language changed to English.',
+      no_emails: '📭 لا يوجد لديك إيميلات',
+      email_label: '📧 البريد',
+      password_label: '🔐 كلمة المرور',
+      status_label: '🔕 الحالة',
+      muted: 'مكتوم',
+      active: 'نشط',
+      delete: '🗑️ حذف',
+      transfer: '📤 نقل',
+      unmute: '🔔 إلغاء الكتم',
+      mute: '🔇 كتم',
+      private_only: '⚠️ البوت يعمل فقط في الخاص حفاظًا على الخصوصية.',
+      bot_off: '⛔ البوت متوقف حاليًا من قبل الإدارة.',
+      help:
+        '📘 الاستخدام:\n\n' +
+        '1- اضغط "إنشاء بريد" لإنشاء بريد عشوائي\n' +
+        '2- أو أرسل أحرف/أرقام إنجليزية ليتم إنشاء بريد بنفس الاسم\n' +
+        '3- من "إيميلاتي" يمكنك الحذف أو النقل أو الكتم\n' +
+        '4- من "مراسلة الدعم" يمكنك التواصل مع الإدارة\n' +
+        '5- من "تغيير اللغة" يمكنك اختيار العربية أو الإنجليزية\n\n' +
+        '/admin للإدارة',
+      cancelled: '✅ تم إلغاء العملية الحالية.',
+      join_success: '✅ تم التحقق من الاشتراك بنجاح.',
+      join_fail: '❌ لم يتم التحقق بعد. اشترك أولًا ثم اضغط تحقق.',
+      force_join_missing: '⚠️ تم تفعيل الاشتراك الإجباري لكن رابط القناة غير مضبوط من الإدارة.',
+      force_join_text:
+        '⚠️ يجب الاشتراك في القناة أولاً\n\n1- اضغط على زر الاشتراك\n2- اشترك في القناة\n3- ارجع للبوت واضغط تحقق',
+      join_button: '📢 الاشتراك في القناة',
+      check_button: '✅ تحقق',
+      support_ask: '📩 أرسل الآن رسالتك ليتم إرسالها إلى جميع الأدمنية.',
+      support_sent: '✅ تم إرسال رسالتك إلى جميع الأدمنية.',
+      support_failed: '❌ تعذر إرسال الرسالة إلى الأدمنية.',
+      email_created: '✅ تم إنشاء البريد بنجاح',
+      random_email_created: '✅ تم إنشاء بريد عشوائي',
+      invalid_email_name:
+        '⚠️ الاسم غير صالح.\nاستخدم فقط أحرف وأرقام إنجليزية بدون مسافات، من 3 إلى 30 حرفًا.',
+      email_name_used: '⚠️ هذا الاسم مستخدم، جرّب اسمًا آخر.',
+      email_create_error: '❌ حدث خطأ أثناء إنشاء البريد.',
+      email_random_error: '❌ تعذر إنشاء بريد عشوائي الآن، حاول مجددًا.',
+      transfer_ask: '📤 أرسل ID المستخدم الذي تريد نقل الإيميل إليه.',
+      invalid_user_id: '⚠️ أرسل ID مستخدم صحيحًا.',
+      email_not_found: '❌ هذا البريد غير موجود.',
+      email_transferred_to_you: '📥 تم نقل إيميل لك',
+      transfer_failed: '❌ فشل النقل، غالبًا المستخدم لم يبدأ البوت.',
+      transfer_success: '✅ تم نقل الإيميل بنجاح.',
+      deleted: '🗑️ تم حذف البريد.',
+      muted_done: '🔇 تم كتم الإشعارات.',
+      unmuted_done: '🔔 تم إلغاء كتم الإشعارات.',
+      only_english_or_button:
+        '⚠️ أرسل فقط أحرف أو أرقام إنجليزية لإنشاء بريد مخصص، أو استخدم زر "إنشاء بريد" للحصول على بريد عشوائي.',
+      admin_only: '⛔ هذا الخيار للأدمن فقط.',
+      new_user_alert_title: '🚀 مستخدم جديد دخل البوت',
+      name: '👤 الاسم',
+      id: '🆔 ID',
+      username: '🔗 المعرف',
+      no_username: 'بدون معرف',
+      started_bot: '✅ قام ببدء البوت'
+    },
+    en: {
+      main_menu: '📋 Main Menu',
+      admin_menu: '👑 Admin Panel',
+      create_email: '📧 Create Email',
+      my_emails: '📂 My Emails',
+      support: '📩 Contact Support',
+      language: '🌐 Change Language',
+      choose_language: '🌐 Choose your language',
+      language_updated_ar: '✅ تم تغيير اللغة إلى العربية.',
+      language_updated_en: '✅ Language changed to English.',
+      no_emails: '📭 You do not have any emails',
+      email_label: '📧 Email',
+      password_label: '🔐 Password',
+      status_label: '🔕 Status',
+      muted: 'Muted',
+      active: 'Active',
+      delete: '🗑️ Delete',
+      transfer: '📤 Transfer',
+      unmute: '🔔 Unmute',
+      mute: '🔇 Mute',
+      private_only: '⚠️ This bot works only in private chat for privacy.',
+      bot_off: '⛔ The bot is currently disabled by the admin.',
+      help:
+        '📘 Usage:\n\n' +
+        '1- Press "Create Email" to create a random email\n' +
+        '2- Or send English letters/numbers to create an email with that name\n' +
+        '3- In "My Emails" you can delete, transfer, or mute\n' +
+        '4- In "Contact Support" you can message the admins\n' +
+        '5- In "Change Language" you can choose Arabic or English\n\n' +
+        '/admin for admins',
+      cancelled: '✅ Current operation has been cancelled.',
+      join_success: '✅ Subscription verified successfully.',
+      join_fail: '❌ Verification failed. Join first, then press verify.',
+      force_join_missing: '⚠️ Forced subscription is enabled but the channel link is not configured by admin.',
+      force_join_text:
+        '⚠️ You must join the channel first\n\n1- Press the join button\n2- Join the channel\n3- Return to the bot and press verify',
+      join_button: '📢 Join Channel',
+      check_button: '✅ Verify',
+      support_ask: '📩 Send your message now and it will be delivered to all admins.',
+      support_sent: '✅ Your message has been sent to all admins.',
+      support_failed: '❌ Failed to send the message to admins.',
+      email_created: '✅ Email created successfully',
+      random_email_created: '✅ Random email created successfully',
+      invalid_email_name:
+        '⚠️ Invalid name.\nUse only English letters and numbers without spaces, 3 to 30 characters.',
+      email_name_used: '⚠️ This name is already used, try another one.',
+      email_create_error: '❌ An error occurred while creating the email.',
+      email_random_error: '❌ Unable to create a random email now, please try again.',
+      transfer_ask: '📤 Send the user ID you want to transfer the email to.',
+      invalid_user_id: '⚠️ Send a valid user ID.',
+      email_not_found: '❌ This email does not exist.',
+      email_transferred_to_you: '📥 An email has been transferred to you',
+      transfer_failed: '❌ Transfer failed, probably the user has not started the bot.',
+      transfer_success: '✅ Email transferred successfully.',
+      deleted: '🗑️ Email deleted.',
+      muted_done: '🔇 Notifications muted.',
+      unmuted_done: '🔔 Notifications unmuted.',
+      only_english_or_button:
+        '⚠️ Send only English letters or numbers to create a custom email, or use the "Create Email" button for a random email.',
+      admin_only: '⛔ This option is for admins only.',
+      new_user_alert_title: '🚀 A new user joined the bot',
+      name: '👤 Name',
+      id: '🆔 ID',
+      username: '🔗 Username',
+      no_username: 'No username',
+      started_bot: '✅ Started the bot'
+    }
+  };
+
+  return texts[lang][key] || texts.ar[key] || key;
+}
+
 // ================== Keyboards ==================
-function mainMenuKeyboard() {
+function mainMenuKeyboard(userId) {
   return {
     inline_keyboard: [
-      [{ text: '📧 إنشاء بريد', callback_data: 'create' }],
-      [{ text: '📂 إيميلاتي', callback_data: 'my' }],
-      [{ text: '📩 مراسلة الدعم', callback_data: 'support' }]
+      [{ text: t(userId, 'create_email'), callback_data: 'create' }],
+      [{ text: t(userId, 'my_emails'), callback_data: 'my' }],
+      [{ text: t(userId, 'support'), callback_data: 'support' }],
+      [{ text: t(userId, 'language'), callback_data: 'lang_menu' }]
+    ]
+  };
+}
+
+function languageKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: '🇮🇶 العربية', callback_data: 'set_lang_ar' },
+        { text: '🇺🇸 English', callback_data: 'set_lang_en' }
+      ]
     ]
   };
 }
@@ -316,13 +490,13 @@ function adminMenuKeyboard() {
   };
 }
 
-function emailActionsKeyboard(index, isMuted) {
+function emailActionsKeyboard(userId, index, isMuted) {
   return {
     inline_keyboard: [
       [
-        { text: '🗑️ حذف', callback_data: `del_${index}` },
-        { text: '📤 نقل', callback_data: `tran_${index}` },
-        { text: isMuted ? '🔔 إلغاء الكتم' : '🔇 كتم', callback_data: `mute_${index}` }
+        { text: t(userId, 'delete'), callback_data: `del_${index}` },
+        { text: t(userId, 'transfer'), callback_data: `tran_${index}` },
+        { text: isMuted ? t(userId, 'unmute') : t(userId, 'mute'), callback_data: `mute_${index}` }
       ]
     ]
   };
@@ -338,14 +512,20 @@ function supportAdminKeyboard(userId) {
 }
 
 // ================== UI ==================
+async function showLanguageMenu(chatId) {
+  await safeSendMessage(chatId, t(chatId, 'choose_language'), {
+    reply_markup: languageKeyboard()
+  });
+}
+
 async function showMainMenu(chatId) {
-  await safeSendMessage(chatId, '📋 القائمة الرئيسية', {
-    reply_markup: mainMenuKeyboard()
+  await safeSendMessage(chatId, t(chatId, 'main_menu'), {
+    reply_markup: mainMenuKeyboard(chatId)
   });
 }
 
 async function showAdminMenu(chatId) {
-  await safeSendMessage(chatId, '👑 لوحة الإدارة', {
+  await safeSendMessage(chatId, t(chatId, 'admin_menu'), {
     reply_markup: adminMenuKeyboard()
   });
 }
@@ -354,7 +534,7 @@ async function showMyEmails(chatId) {
   const user = ensureUser(chatId);
 
   if (!user.emails.length) {
-    await safeSendMessage(chatId, '📭 لا يوجد لديك إيميلات');
+    await safeSendMessage(chatId, t(chatId, 'no_emails'));
     return;
   }
 
@@ -362,11 +542,42 @@ async function showMyEmails(chatId) {
     const e = user.emails[i];
     await safeSendMessage(
       chatId,
-      `📧 البريد:\n${e.email}\n\n🔐 كلمة المرور:\n${e.password}\n\n🔕 الحالة: ${e.mute ? 'مكتوم' : 'نشط'}`,
+      `${t(chatId, 'email_label')}:\n${e.email}\n\n${t(chatId, 'password_label')}:\n${e.password}\n\n${t(chatId, 'status_label')}: ${e.mute ? t(chatId, 'muted') : t(chatId, 'active')}`,
       {
-        reply_markup: emailActionsKeyboard(i, e.mute)
+        reply_markup: emailActionsKeyboard(chatId, i, e.mute)
       }
     );
+  }
+}
+
+// ================== New User Notification ==================
+async function notifyNewUserJoin(msg) {
+  try {
+    const userId = msg.from.id;
+    const user = ensureUser(userId);
+
+    if (user.notifiedJoin) return;
+
+    const fullName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ') || 'غير معروف';
+    const username = msg.from.username ? `@${msg.from.username}` : t(userId, 'no_username');
+
+    const content =
+      `${t(userId, 'new_user_alert_title')}\n\n` +
+      `${t(userId, 'name')}: ${fullName}\n` +
+      `${t(userId, 'id')}: ${userId}\n` +
+      `${t(userId, 'username')}: ${username}\n\n` +
+      `${t(userId, 'started_bot')}`;
+
+    const uniqueAdmins = [...new Set([MAIN_ADMIN, ...getAdmins()])];
+
+    for (const adminId of uniqueAdmins) {
+      await safeSendMessage(adminId, content);
+    }
+
+    user.notifiedJoin = true;
+    saveDB();
+  } catch (error) {
+    logError('notifyNewUserJoin', error);
   }
 }
 
@@ -391,19 +602,18 @@ async function sendForceJoinMessage(chatId) {
   const link = settings.channelLink || buildChannelLink(settings.channel);
 
   if (!link) {
-    await safeSendMessage(chatId, '⚠️ تم تفعيل الاشتراك الإجباري لكن رابط القناة غير مضبوط من الإدارة.');
+    await safeSendMessage(chatId, t(chatId, 'force_join_missing'));
     return;
   }
 
   await safeSendMessage(
     chatId,
-    settings.joinText ||
-      '⚠️ يجب الاشتراك في القناة أولاً\n\n1- اضغط على زر الاشتراك\n2- اشترك في القناة\n3- ارجع للبوت واضغط تحقق',
+    settings.joinText || t(chatId, 'force_join_text'),
     {
       reply_markup: {
         inline_keyboard: [
-          [{ text: '📢 الاشتراك في القناة', url: link }],
-          [{ text: '✅ تحقق', callback_data: 'check' }]
+          [{ text: t(chatId, 'join_button'), url: link }],
+          [{ text: t(chatId, 'check_button'), callback_data: 'check' }]
         ]
       }
     }
@@ -496,10 +706,7 @@ async function createEmail(userId, customName = null) {
       const name = String(customName).trim().toLowerCase();
 
       if (!validEmailName(name)) {
-        await safeSendMessage(
-          userId,
-          '⚠️ الاسم غير صالح.\nاستخدم فقط أحرف وأرقام إنجليزية بدون مسافات، من 3 إلى 30 حرفًا.'
-        );
+        await safeSendMessage(userId, t(userId, 'invalid_email_name'));
         return;
       }
 
@@ -520,7 +727,7 @@ async function createEmail(userId, customName = null) {
 
       await safeSendMessage(
         userId,
-        `✅ تم إنشاء البريد بنجاح\n\n📧 البريد:\n${email}\n\n🔐 كلمة المرور:\n${password}`
+        `${t(userId, 'email_created')}\n\n${t(userId, 'email_label')}:\n${email}\n\n${t(userId, 'password_label')}:\n${password}`
       );
       return;
     }
@@ -546,7 +753,7 @@ async function createEmail(userId, customName = null) {
 
         await safeSendMessage(
           userId,
-          `✅ تم إنشاء بريد عشوائي\n\n📧 البريد:\n${email}\n\n🔐 كلمة المرور:\n${password}`
+          `${t(userId, 'random_email_created')}\n\n${t(userId, 'email_label')}:\n${email}\n\n${t(userId, 'password_label')}:\n${password}`
         );
         return;
       } catch (error) {
@@ -554,15 +761,15 @@ async function createEmail(userId, customName = null) {
       }
     }
 
-    await safeSendMessage(userId, '❌ تعذر إنشاء بريد عشوائي الآن، حاول مجددًا.');
+    await safeSendMessage(userId, t(userId, 'email_random_error'));
   } catch (error) {
     if (error?.response?.status === 422) {
-      await safeSendMessage(userId, '⚠️ هذا الاسم مستخدم، جرّب اسمًا آخر.');
+      await safeSendMessage(userId, t(userId, 'email_name_used'));
       return;
     }
 
     logError('createEmail', error);
-    await safeSendMessage(userId, '❌ حدث خطأ أثناء إنشاء البريد.');
+    await safeSendMessage(userId, t(userId, 'email_create_error'));
   }
 }
 
@@ -571,7 +778,7 @@ async function transferEmail(fromUserId, toUserIdRaw, index) {
   const toId = String(toUserIdRaw).trim();
 
   if (!/^\d+$/.test(toId)) {
-    await safeSendMessage(fromId, '⚠️ أرسل ID مستخدم صحيحًا.');
+    await safeSendMessage(fromId, t(fromId, 'invalid_user_id'));
     return;
   }
 
@@ -579,7 +786,7 @@ async function transferEmail(fromUserId, toUserIdRaw, index) {
   const emailObj = sender.emails[index];
 
   if (!emailObj) {
-    await safeSendMessage(fromId, '❌ هذا البريد غير موجود.');
+    await safeSendMessage(fromId, t(fromId, 'email_not_found'));
     return;
   }
 
@@ -591,7 +798,7 @@ async function transferEmail(fromUserId, toUserIdRaw, index) {
 
   const delivered = await safeSendMessage(
     toId,
-    `📥 تم نقل إيميل لك\n\n📧 ${emailObj.email}\n🔐 ${emailObj.password}`
+    `${t(toId, 'email_transferred_to_you')}\n\n${t(toId, 'email_label')}: ${emailObj.email}\n${t(toId, 'password_label')}: ${emailObj.password}`
   );
 
   if (!delivered) {
@@ -599,11 +806,11 @@ async function transferEmail(fromUserId, toUserIdRaw, index) {
     receiver.emails.pop();
     saveDB();
 
-    await safeSendMessage(fromId, '❌ فشل النقل، غالبًا المستخدم لم يبدأ البوت.');
+    await safeSendMessage(fromId, t(fromId, 'transfer_failed'));
     return;
   }
 
-  await safeSendMessage(fromId, '✅ تم نقل الإيميل بنجاح.');
+  await safeSendMessage(fromId, t(fromId, 'transfer_success'));
 }
 
 // ================== Support / Admin Messaging ==================
@@ -629,9 +836,9 @@ async function sendUserSupportToAdmins(fromMsg, text) {
   }
 
   if (sent > 0) {
-    await safeSendMessage(senderId, '✅ تم إرسال رسالتك إلى جميع الأدمنية.');
+    await safeSendMessage(senderId, t(senderId, 'support_sent'));
   } else {
-    await safeSendMessage(senderId, '❌ تعذر إرسال الرسالة إلى الأدمنية.');
+    await safeSendMessage(senderId, t(senderId, 'support_failed'));
   }
 }
 
@@ -668,16 +875,24 @@ bot.onText(/\/start/, async (msg) => {
   if (!(await requirePrivate(msg))) return;
 
   const userId = msg.from.id;
+  const isNewUser = !getUsers()[String(userId)];
+
+  ensureUser(userId);
 
   if (!botIsEnabledForUser(userId)) {
-    await safeSendMessage(userId, '⛔ البوت متوقف حاليًا من قبل الإدارة.');
+    await safeSendMessage(userId, t(userId, 'bot_off'));
     return;
   }
 
   if (!(await enforceSubscription(msg))) return;
 
   clearState(userId);
-  ensureUser(userId);
+
+  if (isNewUser) {
+    await notifyNewUserJoin(msg);
+  }
+
+  await showLanguageMenu(userId);
   await showMainMenu(userId);
 });
 
@@ -685,9 +900,10 @@ bot.onText(/\/menu/, async (msg) => {
   if (!(await requirePrivate(msg))) return;
 
   const userId = msg.from.id;
+  ensureUser(userId);
 
   if (!botIsEnabledForUser(userId)) {
-    await safeSendMessage(userId, '⛔ البوت متوقف حاليًا من قبل الإدارة.');
+    await safeSendMessage(userId, t(userId, 'bot_off'));
     return;
   }
 
@@ -700,28 +916,25 @@ bot.onText(/\/help/, async (msg) => {
   if (!(await requirePrivate(msg))) return;
 
   const userId = msg.from.id;
+  ensureUser(userId);
 
-  await safeSendMessage(
-    userId,
-    '📘 الاستخدام:\n\n' +
-      '1- اضغط "إنشاء بريد" لإنشاء بريد عشوائي\n' +
-      '2- أو أرسل أحرف/أرقام إنجليزية ليتم إنشاء بريد بنفس الاسم\n' +
-      '3- من "إيميلاتي" يمكنك الحذف أو النقل أو الكتم\n' +
-      '4- من "مراسلة الدعم" يمكنك التواصل مع الإدارة\n\n' +
-      '/admin للإدارة'
-  );
+  await safeSendMessage(userId, t(userId, 'help'));
 });
 
 bot.onText(/\/cancel/, async (msg) => {
   if (!(await requirePrivate(msg))) return;
-  clearState(msg.from.id);
-  await safeSendMessage(msg.from.id, '✅ تم إلغاء العملية الحالية.');
+  const userId = msg.from.id;
+  ensureUser(userId);
+  clearState(userId);
+  await safeSendMessage(userId, t(userId, 'cancelled'));
 });
 
 bot.onText(/\/admin/, async (msg) => {
   if (!(await requirePrivate(msg))) return;
 
   const userId = msg.from.id;
+  ensureUser(userId);
+
   if (!isAdmin(userId)) return;
 
   await showAdminMenu(userId);
@@ -736,8 +949,29 @@ bot.on('callback_query', async (q) => {
 
   if (!userId) return;
 
-  if (!botIsEnabledForUser(userId) && !isAdmin(userId) && data !== 'check') {
-    await safeSendMessage(userId, '⛔ البوت متوقف حاليًا من قبل الإدارة.');
+  ensureUser(userId);
+
+  if (!botIsEnabledForUser(userId) && !isAdmin(userId) && data !== 'check' && !data.startsWith('set_lang_') && data !== 'lang_menu') {
+    await safeSendMessage(userId, t(userId, 'bot_off'));
+    return;
+  }
+
+  if (data === 'lang_menu') {
+    await showLanguageMenu(userId);
+    return;
+  }
+
+  if (data === 'set_lang_ar') {
+    setUserLang(userId, 'ar');
+    await safeSendMessage(userId, t(userId, 'language_updated_ar'));
+    await showMainMenu(userId);
+    return;
+  }
+
+  if (data === 'set_lang_en') {
+    setUserLang(userId, 'en');
+    await safeSendMessage(userId, t(userId, 'language_updated_en'));
+    await showMainMenu(userId);
     return;
   }
 
@@ -745,10 +979,10 @@ bot.on('callback_query', async (q) => {
     const joined = await checkJoin(userId);
 
     if (joined) {
-      await safeSendMessage(userId, '✅ تم التحقق من الاشتراك بنجاح.');
+      await safeSendMessage(userId, t(userId, 'join_success'));
       await showMainMenu(userId);
     } else {
-      await safeSendMessage(userId, '❌ لم يتم التحقق بعد. اشترك أولًا ثم اضغط تحقق.');
+      await safeSendMessage(userId, t(userId, 'join_fail'));
       await sendForceJoinMessage(userId);
     }
     return;
@@ -775,7 +1009,7 @@ bot.on('callback_query', async (q) => {
 
   if (data === 'support') {
     setState(userId, { type: 'support_message' });
-    await safeSendMessage(userId, '📩 أرسل الآن رسالتك ليتم إرسالها إلى جميع الأدمنية.');
+    await safeSendMessage(userId, t(userId, 'support_ask'));
     return;
   }
 
@@ -784,13 +1018,13 @@ bot.on('callback_query', async (q) => {
     const user = ensureUser(userId);
 
     if (!Number.isInteger(index) || !user.emails[index]) {
-      await safeSendMessage(userId, '❌ البريد غير موجود.');
+      await safeSendMessage(userId, t(userId, 'email_not_found'));
       return;
     }
 
     user.emails.splice(index, 1);
     saveDB();
-    await safeSendMessage(userId, '🗑️ تم حذف البريد.');
+    await safeSendMessage(userId, t(userId, 'deleted'));
     return;
   }
 
@@ -799,12 +1033,12 @@ bot.on('callback_query', async (q) => {
     const user = ensureUser(userId);
 
     if (!Number.isInteger(index) || !user.emails[index]) {
-      await safeSendMessage(userId, '❌ البريد غير موجود.');
+      await safeSendMessage(userId, t(userId, 'email_not_found'));
       return;
     }
 
     setState(userId, { type: 'transfer_email', index });
-    await safeSendMessage(userId, '📤 أرسل ID المستخدم الذي تريد نقل الإيميل إليه.');
+    await safeSendMessage(userId, t(userId, 'transfer_ask'));
     return;
   }
 
@@ -813,7 +1047,7 @@ bot.on('callback_query', async (q) => {
     const user = ensureUser(userId);
 
     if (!Number.isInteger(index) || !user.emails[index]) {
-      await safeSendMessage(userId, '❌ البريد غير موجود.');
+      await safeSendMessage(userId, t(userId, 'email_not_found'));
       return;
     }
 
@@ -822,7 +1056,7 @@ bot.on('callback_query', async (q) => {
 
     await safeSendMessage(
       userId,
-      user.emails[index].mute ? '🔇 تم كتم الإشعارات.' : '🔔 تم إلغاء كتم الإشعارات.'
+      user.emails[index].mute ? t(userId, 'muted_done') : t(userId, 'unmuted_done')
     );
     return;
   }
@@ -845,7 +1079,7 @@ bot.on('callback_query', async (q) => {
     data.startsWith('msg_user_')
   ) {
     if (!isAdmin(userId)) {
-      await safeSendMessage(userId, '⛔ هذا الخيار للأدمن فقط.');
+      await safeSendMessage(userId, t(userId, 'admin_only'));
       return;
     }
   }
@@ -940,6 +1174,8 @@ bot.on('message', async (msg) => {
     if (!(await requirePrivate(msg))) return;
 
     const userId = msg.from.id;
+    ensureUser(userId);
+
     const text = typeof msg.text === 'string' ? msg.text.trim() : '';
 
     if (!text) return;
@@ -949,7 +1185,7 @@ bot.on('message', async (msg) => {
 
     // الأدمن يقدر يدخل دائمًا
     if (!botIsEnabledForUser(userId)) {
-      await safeSendMessage(userId, '⛔ البوت متوقف حاليًا من قبل الإدارة.');
+      await safeSendMessage(userId, t(userId, 'bot_off'));
       return;
     }
 
@@ -1104,10 +1340,7 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    await safeSendMessage(
-      userId,
-      '⚠️ أرسل فقط أحرف أو أرقام إنجليزية لإنشاء بريد مخصص، أو استخدم زر "إنشاء بريد" للحصول على بريد عشوائي.'
-    );
+    await safeSendMessage(userId, t(userId, 'only_english_or_button'));
   } catch (error) {
     logError('messageHandler', error);
   }
@@ -1147,15 +1380,22 @@ async function pollOneUserEmails(userId, user) {
 
       for (const msgId of freshIds) {
         const full = await fetchMessageDetails(e.apiToken, msgId);
-        const sender = full?.from?.address || 'غير معروف';
-        const subject = full?.subject || 'بدون عنوان';
-        const bodyRaw = full?.text || stripHtml(full?.html || '') || 'لا يوجد محتوى';
+        const sender = full?.from?.address || (getUserLang(userId) === 'en' ? 'Unknown' : 'غير معروف');
+        const subject = full?.subject || (getUserLang(userId) === 'en' ? 'No subject' : 'بدون عنوان');
+        const bodyRaw = full?.text || stripHtml(full?.html || '') || (getUserLang(userId) === 'en' ? 'No content' : 'لا يوجد محتوى');
         const body = truncate(cleanText(bodyRaw), 2500);
 
-        await safeSendMessage(
-          userId,
-          `📨 رسالة جديدة\n\n📧 البريد: ${e.email}\n👤 المرسل: ${sender}\n📌 العنوان: ${subject}\n\n📩 الرسالة:\n${body}`
-        );
+        if (getUserLang(userId) === 'en') {
+          await safeSendMessage(
+            userId,
+            `📨 New Message\n\n📧 Email: ${e.email}\n👤 From: ${sender}\n📌 Subject: ${subject}\n\n📩 Message:\n${body}`
+          );
+        } else {
+          await safeSendMessage(
+            userId,
+            `📨 رسالة جديدة\n\n📧 البريد: ${e.email}\n👤 المرسل: ${sender}\n📌 العنوان: ${subject}\n\n📩 الرسالة:\n${body}`
+          );
+        }
 
         known.add(msgId);
       }
